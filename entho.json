@@ -1,0 +1,41 @@
+{
+  "resultWithKol": [
+    {
+      "user_id": "295218901",
+      "last_all_mindshare": 0.005872636154976932,
+      "last_7d_mindshare": 0.035135879525977604,
+      "last_7_to_14_day_mindshare": 0.01775647095298027,
+      "last_30d_mindshare": 0.018472167968005482,
+      "last_3m_mindshare": 0.00810897970947403,
+      "last_6m_mindshare": 0.010663810850191292,
+      "last_12m_mindshare": 0.008023771313050654,
+      "last_7d_sum_mention_percentage": 0.035135879525977604,
+      "last_7_to_14_day_sum_mention_percentage": 0.01775647095298027,
+      "last_30d_sum_mention_percentage": 0.018472167968005482,
+      "last_3m_sum_mention_percentage": 0.00810897970947403,
+      "last_6m_sum_mention_percentage": 0.010663810850191292,
+      "last_12m_sum_mention_percentage": 0.008023771313050654,
+      "change_7d": 0.017379408572997333,
+      "change_30d": 0.01666371155797212,
+      "change_3m": 0.027026899816503573,
+      "change_6m": 0.024472068675786312,
+      "change_12m": 0.02711210821292695,
+      "change_7d_ratio": 0.9787592784112613,
+      "change_30d_ratio": 0.902093429287306,
+      "change_3m_ratio": 3.3329182576572043,
+      "change_6m_ratio": 2.2948493305668745,
+      "change_12m_ratio": 3.3789310863983686,
+      "mindshare": 0.035135879525977604,
+      "rank": "2",
+      "name": "vitalik.eth",
+      "username": "VitalikButerin",
+      "icon": "https://asset.cdn.kaito.ai/twitter-user-profile-img/295218901.jpg",
+      "bio": "mi pinxe lo crino tcati",
+      "created_at": "2011-05-08T16:03:03+00:00",
+      "following_count": 448,
+      "follower_count": 5671986,
+      "smart_following_count": 180,
+      "smart_follower_count": 13281
+    }
+  ]
+}
