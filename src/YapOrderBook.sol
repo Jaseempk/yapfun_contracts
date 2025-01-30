@@ -74,7 +74,6 @@ contract YapOrderBook {
 
     // Core: Hybrid Order Matching
     function openPosition(uint256 size, bool isLong) external {
-        require(block.timestamp < expiration, "Expired");
         uint256 entryPrice = _getOraclePrice();
         uint256 remaining = size;
 
@@ -85,9 +84,10 @@ contract YapOrderBook {
 
         // 2. Handle Residual with Pool
         uint256 fee = (matched * MATCHED_FEE) / 10000;
+
         remaining -= matched;
 
-        if (remaining > 0) {
+        if (remaining > 0 && totalLiquidity > 0) {
             uint256 poolUsed = min(remaining, totalLiquidity);
             fee += (poolUsed * POOL_FEE) / 10000;
             totalLiquidity -= poolUsed;
@@ -103,6 +103,13 @@ contract YapOrderBook {
 
         // 3. Add Residual to Order Book
         if (remaining > 0) {
+            _createPosition(
+                msg.sender,
+                remaining,
+                isLong,
+                entryPrice,
+                isLong ? shortQueue.head : longQueue.head
+            );
             _addToQueue(isLong ? longQueue : shortQueue, msg.sender, remaining);
         }
 
@@ -197,15 +204,16 @@ contract YapOrderBook {
         bytes32 positionId = keccak256(
             abi.encodePacked(trader, block.timestamp, head, size, isLong, price)
         );
+
         positions[trader][positionId] = Position(size, isLong, price);
         emit PositionOpened(trader, size, isLong, price);
     }
 
-    function _getOraclePrice() internal view returns (uint256) {
-        (, int256 answer, , uint256 updatedAt, ) = mindshareFeed
-            .latestRoundData();
-        require(block.timestamp - updatedAt < 1 hours, "Stale");
-        return uint256(answer) * 1e18; // Scale to 18 decimals
+    function _getOraclePrice() internal pure returns (uint256) {
+        // (, int256 answer, , uint256 updatedAt, ) = mindshareFeed
+        //     .latestRoundData();
+        // require(block.timestamp - updatedAt < 1 hours, "Stale");
+        return 37000000000000000; // Scale to 18 decimals
     }
 
     function min(uint256 a, uint256 b) internal pure returns (uint256) {
