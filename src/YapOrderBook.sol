@@ -7,6 +7,11 @@ import {AggregatorV3Interface} from "chainlink/contracts/src/v0.8/shared/interfa
 contract YapOrderBook {
     using SafeERC20 for IERC20;
 
+    //error
+    error YOB__INVALID_TRADER();
+    error YOB__INVALIDORDERSIZE();
+    error YOB__INSUFFICIENT_SIZE();
+
     // Immutables
     address public immutable factory;
     uint256 public immutable influencerId;
@@ -37,12 +42,12 @@ contract YapOrderBook {
 
     // Positions
     struct Position {
+        address trader;
         uint256 size;
         bool isLong;
         uint256 entryPrice;
     }
     mapping(address => mapping(bytes32 => Position)) public positions;
-    mapping(address => uint256) public positionCount;
 
     event PositionOpened(
         address indexed trader,
@@ -74,6 +79,7 @@ contract YapOrderBook {
 
     // Core: Hybrid Order Matching
     function openPosition(uint256 size, bool isLong) external {
+        if (size <= 0) revert YOB__INSUFFICIENT_SIZE();
         uint256 entryPrice = _getOraclePrice();
         uint256 remaining = size;
 
@@ -82,11 +88,11 @@ contract YapOrderBook {
             ? _matchWithQueue(shortQueue, size, entryPrice, true)
             : _matchWithQueue(longQueue, size, entryPrice, false);
 
-        // 2. Handle Residual with Pool
         uint256 fee = (matched * MATCHED_FEE) / 10000;
 
         remaining -= matched;
 
+        // 2. Handle Residual with Pool
         if (remaining > 0 && totalLiquidity > 0) {
             uint256 poolUsed = min(remaining, totalLiquidity);
             fee += (poolUsed * POOL_FEE) / 10000;
@@ -113,17 +119,20 @@ contract YapOrderBook {
             _addToQueue(isLong ? longQueue : shortQueue, msg.sender, remaining);
         }
 
+        totalLiquidity += fee;
+
         // 4. Process Funds
         usdc.safeTransferFrom(msg.sender, address(this), size + fee);
-        totalLiquidity += fee;
     }
 
     // Add to contract
     function closePosition(bytes32 positionId) external {
         Position storage pos = positions[msg.sender][positionId];
-        require(pos.size > 0, "!position");
+        if (msg.sender != pos.trader) revert YOB__INVALID_TRADER();
+        if (pos.size <= 0) revert YOB__INVALIDORDERSIZE();
 
         uint256 currentPrice = _getOraclePrice();
+
         int256 pnl = _calculatePnL(pos, currentPrice);
 
         // Remove position
@@ -205,11 +214,11 @@ contract YapOrderBook {
             abi.encodePacked(trader, block.timestamp, head, size, isLong, price)
         );
 
-        positions[trader][positionId] = Position(size, isLong, price);
+        positions[trader][positionId] = Position(trader, size, isLong, price);
         emit PositionOpened(trader, size, isLong, price);
     }
 
-    function _getOraclePrice() internal pure returns (uint256) {
+    function _getOraclePrice() public pure returns (uint256) {
         // (, int256 answer, , uint256 updatedAt, ) = mindshareFeed
         //     .latestRoundData();
         // require(block.timestamp - updatedAt < 1 hours, "Stale");

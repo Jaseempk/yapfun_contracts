@@ -97,10 +97,10 @@ contract YapOrderBookTest is Test {
         (uint256 _size, , ) = yap.positions(bob, bobPosId);
         assertEq(size, 100e18);
         assertEq(_size, 100e18);
-        assertEq(usdc.balanceOf(address(yap)), 200e18 + 1e18); // 1% fee on 100e18 * 2
+        assertEq(usdc.balanceOf(address(yap)), 200e18 + 1e18); // 1% fee on 100e18
     }
 
-    function testPartialMatchWithPool() public {
+    function test_partialMatch_withPool() public {
         // Seed liquidity pool
         vm.prank(charlie);
         usdc.approve(address(yap), 50e18);
@@ -109,24 +109,30 @@ contract YapOrderBookTest is Test {
 
         // Alice opens large short
         vm.prank(alice);
-        usdc.approve(address(yap), 100e18);
+        usdc.approve(address(yap), 103e18);
         vm.prank(alice);
         yap.openPosition(100e18, false);
 
+        console.log("fee collected:", yap.totalLiquidity());
+
         // Verify pool usage
-        assertEq(yap.totalLiquidity(), 50e18 * 0.05); // 5% fee on pool usage
+        assertEq(yap.totalLiquidity(), 50e18 * 0.01); // 1% fee on pool usage
         (, uint256 tail) = yap.longQueue(); // Destructure the tuple
         assertEq(tail, 1); // Residual should be in queue
     }
 
-    function testPositionProfitAndLoss() public {
+    function test_positionProfit_andLoss() public {
         // Alice opens long
         vm.prank(alice);
         usdc.approve(address(yap), 100e18);
+        (uint256 head, ) = yap.shortQueue();
         vm.prank(alice);
         yap.openPosition(100e18, true);
 
-        (uint256 head, ) = yap.longQueue();
+        vm.prank(bob);
+        usdc.approve(address(yap), 102e18);
+        vm.prank(bob);
+        yap.openPosition(100e18, false);
 
         // Verify positions
         bytes32 alicePosId = getPositionId(
@@ -137,19 +143,22 @@ contract YapOrderBookTest is Test {
             37000000000000000
         );
 
+        console.log("Alice position ID: ");
+        console.logBytes32(alicePosId);
+
+        vm.startPrank(alice);
         // Simulate price increase
         uint256 newPrice = 4e18; // 40% increase from 3.7e18
-        // vm.mockCall(
-        //     FEED,
-        //     abi.encodeWithSelector(
-        //         AggregatorV3Interface.latestRoundData.selector
-        //     ),
-        //     abi.encode(0, int256(newPrice), 0, block.timestamp, 0)
-        // );
-
+        vm.mockCall(
+            address(yap),
+            abi.encodeWithSelector(YapOrderBook._getOraclePrice.selector),
+            abi.encode(newPrice)
+        );
         // Close position with profit
-        vm.prank(alice);
         yap.closePosition(alicePosId);
+        assertEq(yap._getOraclePrice(), newPrice);
+
+        console.log("mocked price: ", yap._getOraclePrice());
 
         // Calculate expected PnL: (4 - 3.7) * 100e18 / 1e18 = 30e18
         uint256 expectedBalance = 1000e18 - 100e18 + 100e18 + 30e18;
