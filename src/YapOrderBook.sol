@@ -3,14 +3,16 @@ pragma solidity ^0.8.0;
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {AggregatorV3Interface} from "chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
+import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 
-contract YapOrderBook {
+contract YapOrderBook is AccessControl {
     using SafeERC20 for IERC20;
 
     //error
+    error YOB__EXPIRED();
+    error YOB__INVALIDSIZE();
     error YOB__INVALID_TRADER();
     error YOB__INVALIDORDERSIZE();
-    error YOB__INSUFFICIENT_SIZE();
 
     // Immutables
     address public immutable factory;
@@ -67,7 +69,8 @@ contract YapOrderBook {
         uint256 _expiration,
         address _usdc,
         address _mindshareFeed,
-        address _insuranceFund
+        address _insuranceFund,
+        address admin
     ) {
         factory = msg.sender;
         influencerId = _influencerId;
@@ -75,11 +78,13 @@ contract YapOrderBook {
         usdc = IERC20(_usdc);
         mindshareFeed = AggregatorV3Interface(_mindshareFeed);
         insuranceFund = _insuranceFund;
+        _grantRole(DEFAULT_ADMIN_ROLE, admin);
     }
 
     // Core: Hybrid Order Matching
     function openPosition(uint256 size, bool isLong) external {
-        if (size <= 0) revert YOB__INSUFFICIENT_SIZE();
+        if (size <= 0) revert YOB__INVALIDSIZE();
+        if (block.timestamp > expiration) revert YOB__EXPIRED();
         uint256 entryPrice = _getOraclePrice();
         uint256 remaining = size;
 
@@ -223,6 +228,13 @@ contract YapOrderBook {
         //     .latestRoundData();
         // require(block.timestamp - updatedAt < 1 hours, "Stale");
         return 37000000000000000; // Scale to 18 decimals
+    }
+
+    function addLiquidity(
+        uint256 amount
+    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        usdc.safeTransferFrom(msg.sender, address(this), amount);
+        totalLiquidity += amount;
     }
 
     function min(uint256 a, uint256 b) internal pure returns (uint256) {
