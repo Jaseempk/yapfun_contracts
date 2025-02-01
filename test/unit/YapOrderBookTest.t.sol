@@ -42,11 +42,6 @@ contract YapOrderBookTest is Test {
         bool isLong,
         uint256 price
     ) internal view returns (bytes32) {
-        // console.log("trader: ", trader);
-        // console.log("head: ", head);
-        // console.log("size: ", size);
-        // console.log("isLong: ", isLong);
-        // console.log("price: ", price);
         return
             keccak256(
                 abi.encodePacked(

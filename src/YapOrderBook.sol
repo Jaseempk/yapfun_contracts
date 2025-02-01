@@ -100,8 +100,13 @@ contract YapOrderBook is AccessControl {
         // 2. Handle Residual with Pool
         if (remaining > 0 && totalLiquidity > 0) {
             uint256 poolUsed = min(remaining, totalLiquidity);
-            fee += (poolUsed * POOL_FEE) / 10000;
+            uint256 poolFee = (poolUsed * POOL_FEE) / 10000;
             totalLiquidity -= poolUsed;
+            usdc.safeTransferFrom(
+                msg.sender,
+                address(this),
+                poolUsed + poolFee
+            );
             _createPosition(
                 msg.sender,
                 poolUsed,
@@ -125,9 +130,6 @@ contract YapOrderBook is AccessControl {
         }
 
         totalLiquidity += fee;
-
-        // 4. Process Funds
-        usdc.safeTransferFrom(msg.sender, address(this), size + fee);
     }
 
     // Add to contract
@@ -158,6 +160,11 @@ contract YapOrderBook is AccessControl {
             Order storage order = q.orders[q.head];
             uint256 matchSize = min(size, order.size);
 
+            uint256 fee = (matched * MATCHED_FEE) / 10000;
+
+            usdc.safeTransferFrom(msg.sender, address(this), matchSize + fee);
+            usdc.safeTransferFrom(order.trader, address(this), matchSize + fee);
+
             // Create Position
             _createPosition(msg.sender, matchSize, isLong, price, q.head);
 
@@ -173,6 +180,7 @@ contract YapOrderBook is AccessControl {
                 q.head++;
             }
         }
+
         return matched;
     }
 

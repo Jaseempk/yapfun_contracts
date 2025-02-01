@@ -12,8 +12,8 @@ contract YapOracle is AccessControl, FunctionsClient {
     using FunctionsRequest for FunctionsRequest.Request;
 
     //error
-    error YO__InvalidParams();
     error YO__InvalidRank();
+    error YO__InvalidParams();
     error YO__ChainlinkFunctionsFailed(string);
 
     struct KOLData {
@@ -54,11 +54,6 @@ contract YapOracle is AccessControl, FunctionsClient {
     );
 
     event StaleData(uint256 indexed kolId, uint256 lastUpdateTime);
-
-    modifier onlyUpdater() {
-        require(hasRole(UPDATER_ROLE, msg.sender), "Not authorized");
-        _;
-    }
 
     constructor(
         address updater,
@@ -115,7 +110,7 @@ contract YapOracle is AccessControl, FunctionsClient {
         uint256[] calldata kolIds,
         uint256[] calldata ranks,
         uint256[] calldata mindshareScores
-    ) external onlyUpdater {
+    ) external onlyRole(UPDATER_ROLE) {
         if (
             kolIds.length != ranks.length ||
             ranks.length != mindshareScores.length

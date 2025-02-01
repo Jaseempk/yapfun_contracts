@@ -1,4 +1,4 @@
-const fs = require("fs"); // Import the file system module
+import fs from "fs";
 
 // Define the API endpoint and request options
 const url = "https://hub.kaito.ai/api/v1/gateway/ai?duration=7d&topic_id=&top_n=100";
