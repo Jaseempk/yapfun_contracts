@@ -14,6 +14,7 @@ contract YapOracle is AccessControl, FunctionsClient {
     //error
     error YO__InvalidRank();
     error YO__InvalidParams();
+    error YO__InvalidMindshareScore();
     error YO__ChainlinkFunctionsFailed(string);
 
     struct KOLData {
@@ -116,7 +117,7 @@ contract YapOracle is AccessControl, FunctionsClient {
             ranks.length != mindshareScores.length
         ) revert YO__InvalidParams();
 
-        uint256 timestamp = block.timestamp;
+        
 
         for (uint256 i = 0; i < kolIds.length; i++) {
             uint256 kolId = kolIds[i];
@@ -124,18 +125,19 @@ contract YapOracle is AccessControl, FunctionsClient {
 
             // Validate data
             if (newRank <= 0) revert YO__InvalidRank();
-            require(mindshareScores[i] > 0, "Invalid mindshare");
+            if (mindshareScores[i] <= 0) revert YO__InvalidMindshareScore();
+
 
             kolData[kolId] = KOLData({
                 rank: newRank,
                 mindshareScore: mindshareScores[i],
-                timestamp: timestamp,
+                timestamp: block.timestamp,
                 updateBlock: block.number
             });
 
-            lastUpdateTime[kolId] = timestamp;
+            lastUpdateTime[kolId] = block.timestamp;
 
-            emit KOLDataUpdated(kolId, newRank, mindshareScores[i], timestamp);
+            emit KOLDataUpdated(kolId, newRank, mindshareScores[i], block.timestamp);
         }
     }
 

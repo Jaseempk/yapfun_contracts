@@ -1,29 +1,35 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.24;
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {AggregatorV3Interface} from "chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
+import {IYapOracle} from "./interfaces/IYapOracle.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 
+/**
+ * @title YapOrderBook
+ * @dev This contract is responsible for managing the order book, liquidity pool, and positions within the Yap protocol. 
+ * It ensures the efficient matching of buy and sell orders, maintains a pool of liquidity providers, and tracks the positions of traders.
+ */
 contract YapOrderBook is AccessControl {
     using SafeERC20 for IERC20;
 
     //error
     error YOB__EXPIRED();
     error YOB__INVALIDSIZE();
+    error YOB__DATA_EXPIRED();
     error YOB__INVALID_TRADER();
     error YOB__INVALIDORDERSIZE();
 
     // Immutables
     address public immutable factory;
+    IYapOracle public immutable oracle;
     uint256 public immutable influencerId;
     IERC20 public immutable usdc;
-    AggregatorV3Interface public mindshareFeed;
+
 
     // Constants
     uint256 public constant POOL_FEE = 500; // 5%
     uint256 public constant MATCHED_FEE = 100; // 1%
-    address public insuranceFund;
     uint256 public expiration;
 
     // Order Book
@@ -64,28 +70,39 @@ contract YapOrderBook is AccessControl {
         uint256 price
     );
 
+    /**
+     * @dev Initializes the contract with the necessary parameters.
+     * @param _influencerId The ID of the influencer.
+     * @param _expiration The expiration time for orders.
+     * @param _usdc The address of the USDC token.
+     * @param admin The address of the admin.
+     */
     constructor(
         uint256 _influencerId,
         uint256 _expiration,
         address _usdc,
-        address _mindshareFeed,
-        address _insuranceFund,
+        address _oracle,
         address admin
     ) {
         factory = msg.sender;
         influencerId = _influencerId;
-        expiration = _expiration;
+        expiration = block.timestamp+_expiration;
         usdc = IERC20(_usdc);
-        mindshareFeed = AggregatorV3Interface(_mindshareFeed);
-        insuranceFund = _insuranceFund;
+        oracle = IYapOracle(_oracle);
+
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
     }
 
     // Core: Hybrid Order Matching
+    /**
+     * @dev Opens a new position in the order book.
+     * @param size The size of the position.
+     * @param isLong Whether the position is long or short.
+     */
     function openPosition(uint256 size, bool isLong) external {
         if (size <= 0) revert YOB__INVALIDSIZE();
         if (block.timestamp > expiration) revert YOB__EXPIRED();
-        uint256 entryPrice = _getOraclePrice();
+        uint256 entryPrice = _getOraclePrice(influencerId);
         uint256 remaining = size;
 
         // 1. Match with Order Book
@@ -133,12 +150,18 @@ contract YapOrderBook is AccessControl {
     }
 
     // Add to contract
-    function closePosition(bytes32 positionId) external {
+    /**
+     * @dev Closes a position in the order book.
+     * @param positionId The ID of the position to close.
+     */
+    function closePosition(
+        bytes32 positionId
+    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
         Position storage pos = positions[msg.sender][positionId];
         if (msg.sender != pos.trader) revert YOB__INVALID_TRADER();
         if (pos.size <= 0) revert YOB__INVALIDORDERSIZE();
 
-        uint256 currentPrice = _getOraclePrice();
+        uint256 currentPrice = _getOraclePrice(influencerId);
 
         int256 pnl = _calculatePnL(pos, currentPrice);
 
@@ -150,6 +173,14 @@ contract YapOrderBook is AccessControl {
     }
 
     // Unified Queue Matching
+    /**
+     * @dev Matches orders in the order book with a given size and price.
+     * @param q The order queue to match with.
+     * @param size The size of the match.
+     * @param price The price of the match.
+     * @param isLong Whether the match is for a long or short position.
+     * @return matched The size of the match.
+     */
     function _matchWithQueue(
         OrderQueue storage q,
         uint256 size,
@@ -184,6 +215,12 @@ contract YapOrderBook is AccessControl {
         return matched;
     }
 
+    /**
+     * @dev Adds an order to the order book.
+     * @param q The order queue to add to.
+     * @param trader The address of the trader.
+     * @param size The size of the order.
+     */
     function _addToQueue(
         OrderQueue storage q,
         address trader,
@@ -193,17 +230,12 @@ contract YapOrderBook is AccessControl {
         q.tail++;
     }
 
-    function _calculatePnL(
-        Position memory pos,
-        uint256 currentPrice
-    ) internal pure returns (int256) {
-        if (pos.isLong) {
-            return int256((pos.size * (currentPrice - pos.entryPrice)) / 1e18);
-        } else {
-            return int256((pos.size * (pos.entryPrice - currentPrice)) / 1e18);
-        }
-    }
-
+    /**
+     * @dev Settles the profit or loss from a position.
+     * @param trader The address of the trader.
+     * @param pnl The profit or loss.
+     * @param size The size of the position.
+     */
     function _settlePnL(address trader, int256 pnl, uint256 size) internal {
         if (pnl > 0) {
             require(totalLiquidity >= uint256(pnl), "!liquidity");
@@ -216,6 +248,14 @@ contract YapOrderBook is AccessControl {
     }
 
     // Helpers
+    /**
+     * @dev Creates a new position in the order book.
+     * @param trader The address of the trader.
+     * @param size The size of the position.
+     * @param isLong Whether the position is long or short.
+     * @param price The price of the position.
+     * @param head The head of the order queue.
+     */
     function _createPosition(
         address trader,
         uint256 size,
@@ -231,13 +271,38 @@ contract YapOrderBook is AccessControl {
         emit PositionOpened(trader, size, isLong, price);
     }
 
-    function _getOraclePrice() public pure returns (uint256) {
-        // (, int256 answer, , uint256 updatedAt, ) = mindshareFeed
-        //     .latestRoundData();
-        // require(block.timestamp - updatedAt < 1 hours, "Stale");
-        return 37000000000000000; // Scale to 18 decimals
+    /**
+     * @dev Calculates the profit or loss from a position.
+     * @param pos The position to calculate the profit or loss for.
+     * @param currentPrice The current price.
+     * @return The profit or loss.
+     */
+    function _calculatePnL(
+        Position memory pos,
+        uint256 currentPrice
+    ) internal pure returns (int256) {
+        if (pos.isLong) {
+            return int256((pos.size * (currentPrice - pos.entryPrice)) / 1e18);
+        } else {
+            return int256((pos.size * (pos.entryPrice - currentPrice)) / 1e18);
+        }
     }
 
+    /**
+     * @dev Gets the current price from the oracle.
+     * @return The current price.
+     */
+    function _getOraclePrice(uint256 _influencerId) public view returns (uint256) {
+        (, uint256 mindshareScore, , bool isStale) = oracle.getKOLData(_influencerId);
+        if (isStale) revert YOB__DATA_EXPIRED();
+
+        return (mindshareScore*1e18); // Scale to 18 decimals
+    }
+
+    /**
+     * @dev Adds liquidity to the liquidity pool.
+     * @param amount The amount of liquidity to add.
+     */
     function addLiquidity(
         uint256 amount
     ) external onlyRole(DEFAULT_ADMIN_ROLE) {
@@ -245,6 +310,12 @@ contract YapOrderBook is AccessControl {
         totalLiquidity += amount;
     }
 
+    /**
+     * @dev Returns the minimum of two numbers.
+     * @param a The first number.
+     * @param b The second number.
+     * @return The minimum of the two numbers.
+     */
     function min(uint256 a, uint256 b) internal pure returns (uint256) {
         return a < b ? a : b;
     }

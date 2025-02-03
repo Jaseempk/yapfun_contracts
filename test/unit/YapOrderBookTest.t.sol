@@ -29,7 +29,6 @@ contract YapOrderBookTest is Test {
             block.timestamp + 1 weeks, // expiration
             address(usdc),
             FEED,
-            INSURANCE,
             admin
         );
     }
@@ -153,9 +152,9 @@ contract YapOrderBookTest is Test {
         );
         // Close position with profit
         yap.closePosition(alicePosId);
-        assertEq(yap._getOraclePrice(), newPrice);
+        assertEq(yap._getOraclePrice(1), newPrice);
 
-        console.log("mocked price: ", yap._getOraclePrice());
+        console.log("mocked price: ", yap._getOraclePrice(1));
 
         // Calculate expected PnL: (4 - 3.7) * 100e18 / 1e18 = 30e18
         uint256 expectedBalance = 1000e18 - 100e18 + 100e18 + 30e18;
