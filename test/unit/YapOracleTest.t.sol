@@ -26,4 +26,24 @@ contract YapOracleTest is Test {
         assertEq(rank, 1);
         assertEq(mindshareScore, 1);
     }
+
+    function test_updateKOLData_invalidParams() public {
+        uint256[] memory kolIds = new uint256[](1);
+        uint256[] memory ranks = new uint256[](1);
+        uint256[] memory mindshareScores = new uint256[](1);
+
+        kolIds[0] = 1;
+        ranks[0] = 1;
+        mindshareScores[0] = 1;
+
+        oracle.updateKOLData(kolIds, ranks, mindshareScores);
+        (uint256 rank, uint256 mindshareScore, , ) = oracle.kolData(1);
+        assertEq(rank, 1);
+        assertEq(mindshareScore, 1);
+
+        ranks[0] = 0;
+        mindshareScores[0] = 0;
+        vm.expectRevert(YapOracle.YO__InvalidParams.selector);
+        oracle.updateKOLData(kolIds, ranks, mindshareScores);
+    }
 }

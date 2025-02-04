@@ -14,8 +14,8 @@ const options = {
         method: "GET",
         params: {
             duration: "7d",
-            topic_id: "",
-            top_n: 100,
+            topicid: "",
+            topn: 100,
         },
         body: {},
     }),
