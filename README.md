@@ -1,6 +1,6 @@
 # YapFun
 
-YapFun Protocol is a decentralized derivatives platform for trading social influence. It enables users to take long or short positions on Key Opinion Leaders (KOLs) based on their "mindshare score" through a hybrid liquidity model combining order book matching and liquidity pools.
+YapFun Protocol is a decentralized derivatives platform for trading kaito yaps mindshare. It enables users to take long or short positions on KOLs based on their "mindshare score" through a hybrid liquidity model combining order book matching and liquidity pools.
 
 ## Overview
 
