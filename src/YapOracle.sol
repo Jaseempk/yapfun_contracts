@@ -36,8 +36,6 @@ contract YapOracle is AccessControl {
         uint256 timestamp
     );
 
-    event StaleData(uint256 indexed kolId, uint256 lastUpdateTime);
-
     /**
      * @dev Constructor that sets the initial roles and grants the updater role to the specified address.
      * @param updater The address to which the updater role will be granted.
@@ -66,10 +64,6 @@ contract YapOracle is AccessControl {
         for (uint256 i = 0; i < kolIds.length; i++) {
             uint256 kolId = kolIds[i];
             uint256 newRank = ranks[i];
-
-            if (block.timestamp - lastUpdateTime[kolId] > MAX_UPDATE_DELAY) {
-                emit StaleData(kolId, lastUpdateTime[kolId]);
-            }
 
             // Validate data
             if (newRank == 0 || mindshareScores[i] == 0 || kolId == 0)
