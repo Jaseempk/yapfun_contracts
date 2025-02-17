@@ -7,7 +7,7 @@ import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 
 /**
  * @title YapOrderBook
- * @dev This contract is responsible for managing the order book, liquidity pool, and positions within the Yap protocol. 
+ * @dev This contract is responsible for managing the order book, liquidity pool, and positions within the Yap protocol.
  * It ensures the efficient matching of buy and sell orders, maintains a pool of liquidity providers, and tracks the positions of traders.
  */
 contract YapOrderBook is AccessControl {
@@ -25,7 +25,6 @@ contract YapOrderBook is AccessControl {
     IYapOracle public immutable oracle;
     uint256 public immutable influencerId;
     IERC20 public immutable usdc;
-
 
     // Constants
     uint256 public constant POOL_FEE = 500; // 5%
@@ -86,7 +85,7 @@ contract YapOrderBook is AccessControl {
     ) {
         factory = msg.sender;
         influencerId = _influencerId;
-        expiration = block.timestamp+_expiration;
+        expiration = block.timestamp + _expiration;
         usdc = IERC20(_usdc);
         oracle = IYapOracle(_oracle);
 
@@ -149,7 +148,6 @@ contract YapOrderBook is AccessControl {
         totalLiquidity += fee;
     }
 
-    // Add to contract
     /**
      * @dev Closes a position in the order book.
      * @param positionId The ID of the position to close.
@@ -292,11 +290,15 @@ contract YapOrderBook is AccessControl {
      * @dev Gets the current price from the oracle.
      * @return The current price.
      */
-    function _getOraclePrice(uint256 _influencerId) public view returns (uint256) {
-        (, uint256 mindshareScore, , bool isStale) = oracle.getKOLData(_influencerId);
+    function _getOraclePrice(
+        uint256 _influencerId
+    ) public view returns (uint256) {
+        (, uint256 mindshareScore, , bool isStale) = oracle.getKOLData(
+            _influencerId
+        );
         if (isStale) revert YOB__DATA_EXPIRED();
 
-        return (mindshareScore*1e18); // Scale to 18 decimals
+        return (mindshareScore * 1e18); // Scale to 18 decimals
     }
 
     /**
