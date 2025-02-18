@@ -4,6 +4,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IYapOracle} from "./interfaces/IYapOracle.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {IYapEscrow} from "./interfaces/IYapEscrow.sol";
 
 /**
  * @title YapOrderBook
@@ -19,12 +20,15 @@ contract YapOrderBook is AccessControl {
     error YOB__DATA_EXPIRED();
     error YOB__INVALID_TRADER();
     error YOB__INVALIDORDERSIZE();
+    error YOB__InsufficientUserBalance();
 
     // Immutables
-    address public immutable factory;
-    IYapOracle public immutable oracle;
-    uint256 public immutable influencerId;
     IERC20 public immutable usdc;
+    IYapOracle public immutable oracle;
+    IYapEscrow private immutable escrow;
+
+    address public immutable factory;
+    uint256 public immutable influencerId;
 
     // Constants
     uint256 public constant POOL_FEE = 500; // 5%
@@ -69,6 +73,13 @@ contract YapOrderBook is AccessControl {
         uint256 price
     );
 
+    event PositionClosed(
+        address user,
+        address market,
+        int256 pnl,
+        bytes32 positionId
+    );
+
     /**
      * @dev Initializes the contract with the necessary parameters.
      * @param _influencerId The ID of the influencer.
@@ -81,13 +92,15 @@ contract YapOrderBook is AccessControl {
         uint256 _expiration,
         address _usdc,
         address _oracle,
-        address admin
+        address admin,
+        address _escrow
     ) {
         factory = msg.sender;
         influencerId = _influencerId;
         expiration = block.timestamp + _expiration;
         usdc = IERC20(_usdc);
         oracle = IYapOracle(_oracle);
+        escrow = IYapEscrow(_escrow);
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
     }
@@ -101,6 +114,9 @@ contract YapOrderBook is AccessControl {
     function openPosition(uint256 size, bool isLong) external {
         if (size <= 0) revert YOB__INVALIDSIZE();
         if (block.timestamp > expiration) revert YOB__EXPIRED();
+
+        if (escrow.userToBalance(msg.sender) < size)
+            revert YOB__InsufficientUserBalance();
         uint256 entryPrice = _getOraclePrice(influencerId);
         uint256 remaining = size;
 
@@ -118,11 +134,8 @@ contract YapOrderBook is AccessControl {
             uint256 poolUsed = min(remaining, totalLiquidity);
             uint256 poolFee = (poolUsed * POOL_FEE) / 10000;
             totalLiquidity -= poolUsed;
-            usdc.safeTransferFrom(
-                msg.sender,
-                address(this),
-                poolUsed + poolFee
-            );
+
+            escrow.fulfillOrder(poolUsed + poolFee, address(this), msg.sender);
             _createPosition(
                 msg.sender,
                 poolUsed,
@@ -143,6 +156,7 @@ contract YapOrderBook is AccessControl {
                 isLong ? shortQueue.head : longQueue.head
             );
             _addToQueue(isLong ? longQueue : shortQueue, msg.sender, remaining);
+            escrow.lockTheBalanceToFill(remaining, address(this), msg.sender);
         }
 
         totalLiquidity += fee;
@@ -162,6 +176,8 @@ contract YapOrderBook is AccessControl {
         uint256 currentPrice = _getOraclePrice(influencerId);
 
         int256 pnl = _calculatePnL(pos, currentPrice);
+
+        emit PositionClosed(msg.sender, address(this), pnl, positionId);
 
         // Remove position
         delete positions[msg.sender][positionId];
@@ -190,12 +206,8 @@ contract YapOrderBook is AccessControl {
             uint256 matchSize = min(size, order.size);
 
             uint256 fee = (matched * MATCHED_FEE) / 10000;
-
-            usdc.safeTransferFrom(msg.sender, address(this), matchSize + fee);
-            usdc.safeTransferFrom(order.trader, address(this), matchSize + fee);
-
-            // Create Position
-            _createPosition(msg.sender, matchSize, isLong, price, q.head);
+            escrow.fulfillOrder(matchSize + fee, address(this), msg.sender);
+            escrow.fulfillOrder(matchSize + fee, address(this), order.trader);
 
             emit OrderMatched(msg.sender, order.trader, matchSize, price);
 
@@ -209,6 +221,8 @@ contract YapOrderBook is AccessControl {
                 q.head++;
             }
         }
+        // Create Position
+        _createPosition(msg.sender, matched, isLong, price, q.head);
 
         return matched;
     }
@@ -238,10 +252,10 @@ contract YapOrderBook is AccessControl {
         if (pnl > 0) {
             require(totalLiquidity >= uint256(pnl), "!liquidity");
             totalLiquidity -= uint256(pnl);
-            usdc.safeTransfer(trader, size + uint256(pnl));
+            escrow.settlePnL(trader, size + uint256(pnl), address(this));
         } else {
             totalLiquidity += uint256(-pnl);
-            usdc.safeTransfer(trader, size - uint256(-pnl));
+            escrow.settlePnL(trader, size - uint256(-pnl), address(this));
         }
     }
 
@@ -265,8 +279,8 @@ contract YapOrderBook is AccessControl {
             abi.encodePacked(trader, block.timestamp, head, size, isLong, price)
         );
 
-        positions[trader][positionId] = Position(trader, size, isLong, price);
         emit PositionOpened(trader, size, isLong, price);
+        positions[trader][positionId] = Position(trader, size, isLong, price);
     }
 
     /**
