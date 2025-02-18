@@ -52,6 +52,12 @@ interface IYapEscrow is IAccessControl {
         address makerOrTakerAddy
     ) external;
 
+    function fulfillOrderWithLockedBalance(
+        uint256 orderAmountFilled,
+        address marketAddress,
+        address makerOrTakerAddy
+    ) external;
+
     function lockTheBalanceToFill(
         uint256 balanceToFill,
         address marketAddy,

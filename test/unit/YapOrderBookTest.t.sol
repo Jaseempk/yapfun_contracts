@@ -6,9 +6,15 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Test} from "forge-std/Test.sol";
 import {YapOrderBook} from "src/YapOrderBook.sol";
 import {console} from "forge-std/console.sol";
+import {YapEscrow} from "../../src/YapEscrow.sol";
+import {YapOrderBookFactory} from "../../src/YapOrderBookFactory.sol";
+import {LibRLP} from "solady/utils/LibRLP.sol";
 
 contract YapOrderBookTest is Test {
+    using LibRLP for address;
     YapOrderBook yap;
+    YapEscrow escrow;
+    YapOrderBookFactory factory;
     IERC20 usdc;
     address constant FEED = address(0xdead);
     address constant INSURANCE = address(0xbeef);
@@ -17,20 +23,27 @@ contract YapOrderBookTest is Test {
     address bob = address(0x2);
     address charlie = address(0x3);
     address admin = makeAddr("admin");
+    address _escrow = makeAddr("factory");
 
     function setUp() public {
         usdc = IERC20(0x081827b8C3Aa05287b5aA2bC3051fbE638F33152);
         deal(address(usdc), alice, 1000e18);
         deal(address(usdc), bob, 1000e18);
         deal(address(usdc), charlie, 1000e18);
-
-        yap = new YapOrderBook(
-            1, // influencerId
-            block.timestamp + 1 weeks, // expiration
-            address(usdc),
-            FEED,
-            admin
+        YapEscrow yapEscrowComputed = YapEscrow(
+            address(this).computeAddress(2)
         );
+
+        factory = new YapOrderBookFactory(address(yapEscrowComputed));
+
+        escrow = new YapEscrow(address(usdc), address(factory));
+        assertEq(address(yapEscrowComputed), address(escrow));
+        address _yap = factory.initialiseMarket(
+            1, // influencerId
+            FEED
+        );
+
+        yap = YapOrderBook(_yap);
     }
 
     // Helper to get position ID
@@ -56,19 +69,21 @@ contract YapOrderBookTest is Test {
 
     function test_fullOrderBookMatch() public {
         // Alice opens short position
-        vm.prank(alice);
-        usdc.approve(address(yap), 1200e18);
+        vm.startPrank(alice);
+        usdc.approve(address(escrow), 120e18);
+        escrow.depositUserFund(120e18);
         (uint256 _head, ) = yap.shortQueue();
-        vm.prank(alice);
         yap.openPosition(100e18, false);
+        vm.stopPrank();
 
         // Bob matches with long
-        vm.prank(bob);
-        usdc.approve(address(yap), 130e18);
-        vm.prank(bob);
+        vm.startPrank(bob);
+        usdc.approve(address(escrow), 130e18);
+        escrow.depositUserFund(130e18);
         yap.openPosition(100e18, true);
 
         (uint256 head, ) = yap.longQueue();
+        vm.stopPrank();
 
         // Verify positions
         bytes32 alicePosId = getPositionId(

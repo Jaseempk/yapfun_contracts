@@ -31,7 +31,7 @@ contract YapOrderBookFactory is AccessControl {
     function initialiseMarket(
         uint256 kolId,
         address _oracle
-    ) public onlyRole(DEFAULT_ADMIN_ROLE) {
+    ) public onlyRole(DEFAULT_ADMIN_ROLE) returns (address) {
         if (_oracle == address(0)) revert YOBF__InvalidOracle();
         if (kolId <= 0) revert YOBF__InvalidKolId();
         newMarket = new YapOrderBook(
@@ -48,5 +48,7 @@ contract YapOrderBookFactory is AccessControl {
             address(newMarket)
         );
         yapEscrow.whiteListmarketOB(address(newMarket));
+
+        return address(newMarket);
     }
 }

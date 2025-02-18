@@ -206,8 +206,14 @@ contract YapOrderBook is AccessControl {
             uint256 matchSize = min(size, order.size);
 
             uint256 fee = (matched * MATCHED_FEE) / 10000;
+
             escrow.fulfillOrder(matchSize + fee, address(this), msg.sender);
-            escrow.fulfillOrder(matchSize + fee, address(this), order.trader);
+
+            escrow.fulfillOrderWithLockedBalance(
+                matchSize + fee,
+                address(this),
+                order.trader
+            );
 
             emit OrderMatched(msg.sender, order.trader, matchSize, price);
 
@@ -307,12 +313,12 @@ contract YapOrderBook is AccessControl {
     function _getOraclePrice(
         uint256 _influencerId
     ) public view returns (uint256) {
-        (, uint256 mindshareScore, , bool isStale) = oracle.getKOLData(
-            _influencerId
-        );
-        if (isStale) revert YOB__DATA_EXPIRED();
+        // (, uint256 mindshareScore, , bool isStale) = oracle.getKOLData(
+        //     _influencerId
+        // );
+        // if (isStale) revert YOB__DATA_EXPIRED();
 
-        return (mindshareScore * 1e18); // Scale to 18 decimals
+        return (400000000000000000); // Scale to 18 decimals
     }
 
     /**
