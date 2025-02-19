@@ -17,6 +17,7 @@ contract YapFun is AccessControl {
     error YOB__INVALID_TRADER();
     error YOB__CallerIsNotTrader();
     error YOB__OrderYetToBeFilled();
+    error YOB__Insufficient_Liquidity();
 
     // Order status
     enum OrderStatus {
@@ -78,13 +79,7 @@ contract YapFun is AccessControl {
         uint256 filledQuantity,
         address counterpartyTrader
     );
-    event OrderCanceled(uint256 indexed orderId);
-    event TradeExecuted(
-        uint256 indexed longOrderId,
-        uint256 indexed shortOrderId,
-        uint256 quantity,
-        uint256 mindshareValue
-    );
+    event OrderCanceled(uint256 indexed orderId, Order order);
 
     event PositionClosed(
         address user,
@@ -178,12 +173,12 @@ contract YapFun is AccessControl {
         order.status = OrderStatus.CANCELED;
         activeOrderCount[order.kolId]--;
 
+        emit OrderCanceled(_orderId, order);
+
         // Refund remaining stablecoin
         if (refundAmount > 0) {
             escrow.settlePnL(msg.sender, refundAmount, address(this));
         }
-
-        emit OrderCanceled(_orderId);
     }
 
     /**
@@ -217,10 +212,8 @@ contract YapFun is AccessControl {
      */
     function _settlePnL(address trader, int256 pnl, uint256 size) internal {
         if (pnl > 0) {
-            require(
-                stablecoin.balanceOf(address(this)) >= uint256(pnl),
-                "!liquidity"
-            );
+            if (stablecoin.balanceOf(address(this)) < uint256(pnl))
+                revert YOB__Insufficient_Liquidity();
 
             escrow.settlePnL(trader, size + uint256(pnl), address(this));
         } else {
@@ -264,6 +257,8 @@ contract YapFun is AccessControl {
         // Find matching orders with opposite position type
         bool oppositePosition = !order.isLong;
 
+        uint256 totalFilled;
+
         // Get possible matching orders
         uint256[] storage matchingOrderIds = orderIndex[oppositePosition][
             order.mindshareValue
@@ -294,9 +289,15 @@ contract YapFun is AccessControl {
                 : orderRemaining;
 
             if (fillAmount > 0) {
+                totalFilled += fillAmount;
                 // Update both orders
                 order.filledQuantity += fillAmount;
                 matchOrder.filledQuantity += fillAmount;
+                escrow.fulfillOrderWithLockedBalance(
+                    fillAmount,
+                    address(this),
+                    matchOrder.trader
+                );
 
                 // Update order statuses
                 if (matchOrder.filledQuantity == matchOrder.quantity) {
@@ -310,83 +311,35 @@ contract YapFun is AccessControl {
             }
         }
 
+        uint256 feeAmount = (order.filledQuantity * feePercentage) / 10000;
+
         // Update final status of the order
-        if (order.filledQuantity == order.quantity) {
+        if (
+            order.filledQuantity == order.quantity && order.filledQuantity > 0
+        ) {
+            emit OrderFilled(_orderId, order.filledQuantity, address(0));
+            escrow.fulfillOrder(
+                totalFilled + feeAmount,
+                address(this),
+                order.trader
+            );
             order.status = OrderStatus.FILLED;
             activeOrderCount[order.kolId]--;
         } else if (order.filledQuantity > 0) {
+            emit OrderFilled(_orderId, order.filledQuantity, address(0));
+            escrow.fulfillOrder(
+                totalFilled + feeAmount,
+                address(this),
+                order.trader
+            );
             order.status = OrderStatus.PARTIAL_FILLED;
+        } else if (order.filledQuantity == 0) {
+            escrow.lockTheBalanceToFill(
+                order.quantity,
+                address(this),
+                order.trader
+            );
         }
-
-        if (order.filledQuantity > 0) {
-            emit OrderFilled(_orderId, order.filledQuantity, address(0)); // address(0) as counterparty means multiple counterparties
-        }
-    }
-
-    /**
-     * @dev Get best matching orders for a specific KOL and position
-     * @param _isLong Whether to get LONG (true) or SHORT (false) orders
-     * @param _limit Maximum number of orders to return
-     */
-    function getBestOrders(
-        bool _isLong,
-        uint256 _limit
-    ) external view returns (uint256[] memory) {
-        // In a production system, you'd need more sophisticated ordering
-        // This simplified version just returns the first N orders
-
-        uint256[] memory result = new uint256[](_limit);
-        uint256 count = 0;
-
-        // In a real implementation, you would iterate through mindshare values
-        // in order of preference (best price first)
-        uint256[] storage potentialOrders = orderIndex[_isLong][0]; // 0 is a placeholder
-
-        for (uint256 i = 0; i < potentialOrders.length && count < _limit; i++) {
-            uint256 orderId = potentialOrders[i];
-            if (
-                orders[orderId].status == OrderStatus.ACTIVE ||
-                orders[orderId].status == OrderStatus.PARTIAL_FILLED
-            ) {
-                result[count] = orderId;
-                count++;
-            }
-        }
-
-        return result;
-    }
-
-    /**
-     * @dev Force match all eligible orders for a KOL
-     * @param _maxIterations Maximum number of matching attempts
-     */
-    function forceMatchOrders(
-        uint256 _maxIterations
-    ) external returns (uint256) {
-        uint256 matchCount = 0;
-        uint256 iterations = 0;
-
-        // This is a simplified version that would need optimization
-        // Get all LONG orders for this KOL
-        uint256[] storage longOrders = orderIndex[true][0]; // 0 is a placeholder
-
-        for (
-            uint256 i = 0;
-            i < longOrders.length && iterations < _maxIterations;
-            i++
-        ) {
-            Order storage order = orders[longOrders[i]];
-            if (
-                order.status == OrderStatus.ACTIVE ||
-                order.status == OrderStatus.PARTIAL_FILLED
-            ) {
-                _matchOrder(order.positionId);
-                matchCount++;
-            }
-            iterations++;
-        }
-
-        return matchCount;
     }
 
     /**
@@ -422,12 +375,9 @@ contract YapFun is AccessControl {
 
     /**
      * @dev Get count of active orders for a KOL
-     * @param _kolId KOL ID to query
      */
-    function getActiveOrderCount(
-        uint256 _kolId
-    ) external view returns (uint256) {
-        return activeOrderCount[_kolId];
+    function getActiveOrderCount() external view returns (uint256) {
+        return activeOrderCount[kolId];
     }
 
     /**
