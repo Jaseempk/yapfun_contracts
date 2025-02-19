@@ -12,9 +12,11 @@ import {IYapOracle} from "./interfaces/IYapOracle.sol";
 contract YapFun is AccessControl {
     //error
     error YOB__INVALIDSIZE();
+    error YOB__InvalidOrder();
     error YOB__DATA_EXPIRED();
     error YOB__INVALID_TRADER();
-    error YOB__INVALIDORDERSIZE();
+    error YOB__CallerIsNotTrader();
+    error YOB__OrderYetToBeFilled();
 
     // Order status
     enum OrderStatus {
@@ -46,7 +48,7 @@ contract YapFun is AccessControl {
     mapping(uint256 => Order) public orders;
 
     // Index orders by KOL and position type
-    // kolId => isLong => mindshareValue => orderIds[]
+    // isLong => mindshareValue => orderIds[]
     mapping(bool => mapping(uint256 => uint256[])) private orderIndex;
 
     // Track active orders count by KOL
@@ -163,12 +165,11 @@ contract YapFun is AccessControl {
      */
     function cancelOrder(uint256 _orderId) external {
         Order storage order = orders[_orderId];
-        require(order.trader == msg.sender, "Not order owner");
-        require(
-            order.status == OrderStatus.ACTIVE ||
-                order.status == OrderStatus.PARTIAL_FILLED,
-            "Cannot cancel"
-        );
+        if (order.trader != msg.sender) revert YOB__CallerIsNotTrader();
+        if (
+            order.status != OrderStatus.ACTIVE ||
+            order.status != OrderStatus.PARTIAL_FILLED
+        ) revert YOB__InvalidOrder();
 
         // Calculate refund amount
         uint256 refundAmount = order.quantity - order.filledQuantity;
@@ -179,10 +180,7 @@ contract YapFun is AccessControl {
 
         // Refund remaining stablecoin
         if (refundAmount > 0) {
-            require(
-                stablecoin.transfer(msg.sender, refundAmount),
-                "Refund failed"
-            );
+            escrow.settlePnL(msg.sender, refundAmount, address(this));
         }
 
         emit OrderCanceled(_orderId);
@@ -197,13 +195,15 @@ contract YapFun is AccessControl {
     ) external onlyRole(DEFAULT_ADMIN_ROLE) {
         Order storage pos = orders[positionId];
         if (msg.sender != pos.trader) revert YOB__INVALID_TRADER();
-        if (pos.filledQuantity <= 0) revert YOB__INVALIDORDERSIZE();
+        if (pos.filledQuantity <= 0) revert YOB__OrderYetToBeFilled();
 
         uint256 currentPrice = _getOraclePrice(kolId);
 
         int256 pnl = _calculatePnL(pos, currentPrice);
 
         emit PositionClosed(msg.sender, address(this), pnl, positionId);
+
+        delete orders[positionId];
 
         // Deduct losses from collateral or add profits
         _settlePnL(msg.sender, pnl, pos.filledQuantity);
