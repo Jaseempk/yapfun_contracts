@@ -1,165 +1,194 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
-import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {IYapOracle} from "./interfaces/IYapOracle.sol";
+pragma solidity ^0.8.17;
+
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {IYapEscrow} from "./interfaces/IYapEscrow.sol";
+import {IYapOracle} from "./interfaces/IYapOracle.sol";
 
 /**
- * @title YapOrderBook
- * @dev This contract is responsible for managing the order book, liquidity pool, and positions within the Yap protocol.
- * It ensures the efficient matching of buy and sell orders, maintains a pool of liquidity providers, and tracks the positions of traders.
+ * @title MindshareOrderBook
+ * @dev An onchain orderbook for trading KOL mindshare positions
  */
-contract YapOrderBook is AccessControl {
-    using SafeERC20 for IERC20;
-
+contract MindshareOrderBook is AccessControl {
     //error
-    error YOB__EXPIRED();
-    error YOB__INVALIDSIZE();
-    error YOB__DATA_EXPIRED();
-    error YOB__INVALID_TRADER();
     error YOB__INVALIDORDERSIZE();
-    error YOB__InsufficientUserBalance();
+    error YOB__INVALID_TRADER();
+    error YOB__DATA_EXPIRED();
 
-    // Immutables
-    IERC20 public immutable usdc;
-    IYapOracle public immutable oracle;
-    IYapEscrow private immutable escrow;
+    // Order status
+    enum OrderStatus {
+        ACTIVE,
+        FILLED,
+        PARTIAL_FILLED,
+        CANCELED
+    }
 
-    address public immutable factory;
-    uint256 public immutable influencerId;
-
-    // Constants
-    uint256 public constant POOL_FEE = 500; // 5%
-    uint256 public constant MATCHED_FEE = 100; // 1%
-    uint256 public expiration;
-
-    // Order Book
+    // Order structure
     struct Order {
         address trader;
-        uint256 size;
+        uint256 positionId;
+        uint256 kolId; // ID of the Key Opinion Leader (KOL)
+        bool isLong; // true = LONG, false = SHORT
+        uint256 mindshareValue; // Mindshare metric value for matching
+        uint256 quantity; // Amount of USDC/USDT to invest
+        uint256 filledQuantity; // Amount already filled
+        uint256 timestamp;
+        OrderStatus status;
     }
-    struct OrderQueue {
-        uint256 head;
-        uint256 tail;
-        mapping(uint256 => Order) orders;
-    }
-    OrderQueue public longQueue;
-    OrderQueue public shortQueue;
 
-    // Liquidity Pool
-    uint256 public totalLiquidity;
+    // Counters for order IDs
+    uint256 private nextOrderId = 1;
 
-    // Positions
-    struct Position {
-        address trader;
-        uint256 size;
-        bool isLong;
-        uint256 entryPrice;
-    }
-    mapping(address => mapping(bytes32 => Position)) public positions;
+    uint256 public immutable kolId;
 
-    event PositionOpened(
+    // Order storage - orderId => Order
+    mapping(uint256 => Order) public orders;
+
+    // Index orders by KOL and position type
+    // kolId => isLong => mindshareValue => orderIds[]
+    mapping(uint256 => mapping(bool => mapping(uint256 => uint256[])))
+        private orderIndex;
+
+    // Track active orders count by KOL
+    mapping(uint256 => uint256) public activeOrderCount;
+
+    // USDC/USDT interface
+    IERC20 public stablecoin;
+
+    IYapEscrow public immutable escrow;
+    IYapOracle public immutable oracle;
+
+    // Fee configuration
+    uint256 public feePercentage = 30; // 0.3% fee (basis points)
+    address public feeCollector;
+
+    // Events
+    event OrderCreated(
+        uint256 indexed orderId,
         address indexed trader,
-        uint256 size,
+        uint256 indexed kolId,
         bool isLong,
-        uint256 entryPrice
+        uint256 mindshareValue,
+        uint256 quantity
     );
-    event OrderMatched(
-        address indexed long,
-        address indexed short,
-        uint256 size,
-        uint256 price
+    event OrderFilled(
+        uint256 indexed orderId,
+        uint256 filledQuantity,
+        address counterpartyTrader
+    );
+    event OrderCanceled(uint256 indexed orderId);
+    event TradeExecuted(
+        uint256 indexed longOrderId,
+        uint256 indexed shortOrderId,
+        uint256 quantity,
+        uint256 mindshareValue
     );
 
     event PositionClosed(
         address user,
         address market,
         int256 pnl,
-        bytes32 positionId
+        uint256 positionId
     );
 
     /**
-     * @dev Initializes the contract with the necessary parameters.
-     * @param _influencerId The ID of the influencer.
-     * @param _expiration The expiration time for orders.
-     * @param _usdc The address of the USDC token.
-     * @param admin The address of the admin.
+     * @dev Constructor
+     * @param _stablecoin Address of the USDC/USDT contract
+     * @param _feeCollector Address that collects trading fees
      */
     constructor(
-        uint256 _influencerId,
-        uint256 _expiration,
-        address _usdc,
-        address _oracle,
-        address admin,
-        address _escrow
+        address _stablecoin,
+        address _feeCollector,
+        address _escrow,
+        address yapOracle,
+        uint256 _kolId
     ) {
-        factory = msg.sender;
-        influencerId = _influencerId;
-        expiration = block.timestamp + _expiration;
-        usdc = IERC20(_usdc);
-        oracle = IYapOracle(_oracle);
+        stablecoin = IERC20(_stablecoin);
+        feeCollector = _feeCollector;
         escrow = IYapEscrow(_escrow);
-
-        _grantRole(DEFAULT_ADMIN_ROLE, admin);
+        oracle = IYapOracle(yapOracle);
+        kolId = _kolId;
     }
 
-    // Core: Hybrid Order Matching
     /**
-     * @dev Opens a new position in the order book.
-     * @param size The size of the position.
-     * @param isLong Whether the position is long or short.
+     * @dev Create a new order in the orderbook
+     * @param _isLong Whether this is a LONG position (true) or SHORT (false)
+     * @param _quantity Amount of stablecoin to invest
      */
-    function openPosition(uint256 size, bool isLong) external {
-        if (size <= 0) revert YOB__INVALIDSIZE();
-        if (block.timestamp > expiration) revert YOB__EXPIRED();
+    function createOrder(
+        bool _isLong,
+        uint256 _quantity
+    ) external returns (uint256) {
+        require(_quantity > 0, "Quantity must be positive");
 
-        if (escrow.userToBalance(msg.sender) < size)
-            revert YOB__InsufficientUserBalance();
-        uint256 entryPrice = _getOraclePrice(influencerId);
-        uint256 remaining = size;
+        // Transfer stablecoin to contract
+        require(
+            stablecoin.transferFrom(msg.sender, address(this), _quantity),
+            "Transfer failed"
+        );
 
-        // 1. Match with Order Book
-        uint256 matched = isLong
-            ? _matchWithQueue(shortQueue, size, entryPrice, true)
-            : _matchWithQueue(longQueue, size, entryPrice, false);
+        // Create the order
+        uint256 orderId = nextOrderId++;
+        uint256 _mindshareValue = _getOraclePrice(kolId);
+        Order storage order = orders[orderId];
+        order.trader = msg.sender;
+        order.positionId = orderId;
+        order.kolId = kolId;
+        order.isLong = _isLong;
+        order.mindshareValue = _mindshareValue;
+        order.quantity = _quantity;
+        order.filledQuantity = 0;
+        order.timestamp = block.timestamp;
+        order.status = OrderStatus.ACTIVE;
 
-        uint256 fee = (matched * MATCHED_FEE) / 10000;
+        // Index the order
+        orderIndex[kolId][_isLong][_mindshareValue].push(orderId);
+        activeOrderCount[kolId]++;
 
-        remaining -= matched;
+        emit OrderCreated(
+            orderId,
+            msg.sender,
+            kolId,
+            _isLong,
+            _mindshareValue,
+            _quantity
+        );
 
-        // 2. Handle Residual with Pool
-        if (remaining > 0 && totalLiquidity > 0) {
-            uint256 poolUsed = min(remaining, totalLiquidity);
-            uint256 poolFee = (poolUsed * POOL_FEE) / 10000;
-            totalLiquidity -= poolUsed;
+        // Try to match the order immediately
+        _matchOrder(orderId);
 
-            escrow.fulfillOrder(poolUsed + poolFee, address(this), msg.sender);
-            _createPosition(
-                msg.sender,
-                poolUsed,
-                isLong,
-                entryPrice,
-                isLong ? shortQueue.head : longQueue.head
+        return orderId;
+    }
+
+    /**
+     * @dev Cancel an existing order
+     * @param _orderId ID of the order to cancel
+     */
+    function cancelOrder(uint256 _orderId) external {
+        Order storage order = orders[_orderId];
+        require(order.trader == msg.sender, "Not order owner");
+        require(
+            order.status == OrderStatus.ACTIVE ||
+                order.status == OrderStatus.PARTIAL_FILLED,
+            "Cannot cancel"
+        );
+
+        // Calculate refund amount
+        uint256 refundAmount = order.quantity - order.filledQuantity;
+
+        // Update order status
+        order.status = OrderStatus.CANCELED;
+        activeOrderCount[order.kolId]--;
+
+        // Refund remaining stablecoin
+        if (refundAmount > 0) {
+            require(
+                stablecoin.transfer(msg.sender, refundAmount),
+                "Refund failed"
             );
-            remaining -= poolUsed;
         }
 
-        // 3. Add Residual to Order Book
-        if (remaining > 0) {
-            _createPosition(
-                msg.sender,
-                remaining,
-                isLong,
-                entryPrice,
-                isLong ? shortQueue.head : longQueue.head
-            );
-            _addToQueue(isLong ? longQueue : shortQueue, msg.sender, remaining);
-            escrow.lockTheBalanceToFill(remaining, address(this), msg.sender);
-        }
-
-        totalLiquidity += fee;
+        emit OrderCanceled(_orderId);
     }
 
     /**
@@ -167,85 +196,20 @@ contract YapOrderBook is AccessControl {
      * @param positionId The ID of the position to close.
      */
     function closePosition(
-        bytes32 positionId
+        uint256 positionId
     ) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        Position storage pos = positions[msg.sender][positionId];
+        Order storage pos = orders[positionId];
         if (msg.sender != pos.trader) revert YOB__INVALID_TRADER();
-        if (pos.size <= 0) revert YOB__INVALIDORDERSIZE();
+        if (pos.filledQuantity <= 0) revert YOB__INVALIDORDERSIZE();
 
-        uint256 currentPrice = _getOraclePrice(influencerId);
+        uint256 currentPrice = _getOraclePrice(kolId);
 
         int256 pnl = _calculatePnL(pos, currentPrice);
 
         emit PositionClosed(msg.sender, address(this), pnl, positionId);
 
-        // Remove position
-        delete positions[msg.sender][positionId];
-
         // Deduct losses from collateral or add profits
-        _settlePnL(msg.sender, pnl, pos.size);
-    }
-
-    // Unified Queue Matching
-    /**
-     * @dev Matches orders in the order book with a given size and price.
-     * @param q The order queue to match with.
-     * @param size The size of the match.
-     * @param price The price of the match.
-     * @param isLong Whether the match is for a long or short position.
-     * @return matched The size of the match.
-     */
-    function _matchWithQueue(
-        OrderQueue storage q,
-        uint256 size,
-        uint256 price,
-        bool isLong
-    ) internal returns (uint256 matched) {
-        while (size > 0 && q.head < q.tail) {
-            Order storage order = q.orders[q.head];
-            uint256 matchSize = min(size, order.size);
-
-            uint256 fee = (matched * MATCHED_FEE) / 10000;
-
-            escrow.fulfillOrder(matchSize + fee, address(this), msg.sender);
-
-            escrow.fulfillOrderWithLockedBalance(
-                matchSize + fee,
-                address(this),
-                order.trader
-            );
-
-            emit OrderMatched(msg.sender, order.trader, matchSize, price);
-
-            // Update State
-            size -= matchSize;
-            order.size -= matchSize;
-            matched += matchSize;
-
-            if (order.size == 0) {
-                delete q.orders[q.head];
-                q.head++;
-            }
-        }
-        // Create Position
-        _createPosition(msg.sender, matched, isLong, price, q.head);
-
-        return matched;
-    }
-
-    /**
-     * @dev Adds an order to the order book.
-     * @param q The order queue to add to.
-     * @param trader The address of the trader.
-     * @param size The size of the order.
-     */
-    function _addToQueue(
-        OrderQueue storage q,
-        address trader,
-        uint256 size
-    ) internal {
-        q.orders[q.tail] = Order(trader, size);
-        q.tail++;
+        _settlePnL(msg.sender, pnl, pos.filledQuantity);
     }
 
     /**
@@ -256,37 +220,15 @@ contract YapOrderBook is AccessControl {
      */
     function _settlePnL(address trader, int256 pnl, uint256 size) internal {
         if (pnl > 0) {
-            require(totalLiquidity >= uint256(pnl), "!liquidity");
-            totalLiquidity -= uint256(pnl);
+            require(
+                stablecoin.balanceOf(address(this)) >= uint256(pnl),
+                "!liquidity"
+            );
+
             escrow.settlePnL(trader, size + uint256(pnl), address(this));
         } else {
-            totalLiquidity += uint256(-pnl);
             escrow.settlePnL(trader, size - uint256(-pnl), address(this));
         }
-    }
-
-    // Helpers
-    /**
-     * @dev Creates a new position in the order book.
-     * @param trader The address of the trader.
-     * @param size The size of the position.
-     * @param isLong Whether the position is long or short.
-     * @param price The price of the position.
-     * @param head The head of the order queue.
-     */
-    function _createPosition(
-        address trader,
-        uint256 size,
-        bool isLong,
-        uint256 price,
-        uint256 head
-    ) internal {
-        bytes32 positionId = keccak256(
-            abi.encodePacked(trader, block.timestamp, head, size, isLong, price)
-        );
-
-        emit PositionOpened(trader, size, isLong, price);
-        positions[trader][positionId] = Position(trader, size, isLong, price);
     }
 
     /**
@@ -296,14 +238,203 @@ contract YapOrderBook is AccessControl {
      * @return The profit or loss.
      */
     function _calculatePnL(
-        Position memory pos,
+        Order memory pos,
         uint256 currentPrice
     ) internal pure returns (int256) {
         if (pos.isLong) {
-            return int256((pos.size * (currentPrice - pos.entryPrice)) / 1e18);
+            return
+                int256(
+                    (pos.filledQuantity * (currentPrice - pos.mindshareValue)) /
+                        1e18
+                );
         } else {
-            return int256((pos.size * (pos.entryPrice - currentPrice)) / 1e18);
+            return
+                int256(
+                    (pos.filledQuantity * (pos.mindshareValue - currentPrice)) /
+                        1e18
+                );
         }
+    }
+
+    /**
+     * @dev Internal function to match a new order against existing orders
+     * @param _orderId ID of the order to match
+     */
+    function _matchOrder(uint256 _orderId) internal {
+        Order storage order = orders[_orderId];
+        if (order.status != OrderStatus.ACTIVE) return;
+
+        // Find matching orders with opposite position type
+        bool oppositePosition = !order.isLong;
+
+        // Get possible matching orders
+        uint256[] storage matchingOrderIds = orderIndex[order.kolId][
+            oppositePosition
+        ][order.mindshareValue];
+
+        // Match against available orders
+        for (
+            uint256 i = 0;
+            i < matchingOrderIds.length &&
+                order.filledQuantity < order.quantity;
+            i++
+        ) {
+            uint256 matchId = matchingOrderIds[i];
+            Order storage matchOrder = orders[matchId];
+
+            // Skip if not active
+            if (
+                matchOrder.status != OrderStatus.ACTIVE &&
+                matchOrder.status != OrderStatus.PARTIAL_FILLED
+            ) continue;
+
+            // Calculate fill amount
+            uint256 matchAvailable = matchOrder.quantity -
+                matchOrder.filledQuantity;
+            uint256 orderRemaining = order.quantity - order.filledQuantity;
+            uint256 fillAmount = matchAvailable < orderRemaining
+                ? matchAvailable
+                : orderRemaining;
+
+            if (fillAmount > 0) {
+                // Update both orders
+                order.filledQuantity += fillAmount;
+                matchOrder.filledQuantity += fillAmount;
+
+                // Update order statuses
+                if (matchOrder.filledQuantity == matchOrder.quantity) {
+                    matchOrder.status = OrderStatus.FILLED;
+                    activeOrderCount[matchOrder.kolId]--;
+                } else {
+                    matchOrder.status = OrderStatus.PARTIAL_FILLED;
+                }
+
+                emit OrderFilled(matchId, fillAmount, order.trader);
+            }
+        }
+
+        // Update final status of the order
+        if (order.filledQuantity == order.quantity) {
+            order.status = OrderStatus.FILLED;
+            activeOrderCount[order.kolId]--;
+        } else if (order.filledQuantity > 0) {
+            order.status = OrderStatus.PARTIAL_FILLED;
+        }
+
+        if (order.filledQuantity > 0) {
+            emit OrderFilled(_orderId, order.filledQuantity, address(0)); // address(0) as counterparty means multiple counterparties
+        }
+    }
+
+    /**
+     * @dev Get best matching orders for a specific KOL and position
+     * @param _kolId The KOL whose mindshare is being queried
+     * @param _isLong Whether to get LONG (true) or SHORT (false) orders
+     * @param _limit Maximum number of orders to return
+     */
+    function getBestOrders(
+        uint256 _kolId,
+        bool _isLong,
+        uint256 _limit
+    ) external view returns (uint256[] memory) {
+        // In a production system, you'd need more sophisticated ordering
+        // This simplified version just returns the first N orders
+
+        uint256[] memory result = new uint256[](_limit);
+        uint256 count = 0;
+
+        // In a real implementation, you would iterate through mindshare values
+        // in order of preference (best price first)
+        uint256[] storage potentialOrders = orderIndex[_kolId][_isLong][0]; // 0 is a placeholder
+
+        for (uint256 i = 0; i < potentialOrders.length && count < _limit; i++) {
+            uint256 orderId = potentialOrders[i];
+            if (
+                orders[orderId].status == OrderStatus.ACTIVE ||
+                orders[orderId].status == OrderStatus.PARTIAL_FILLED
+            ) {
+                result[count] = orderId;
+                count++;
+            }
+        }
+
+        return result;
+    }
+
+    /**
+     * @dev Force match all eligible orders for a KOL
+     * @param _kolId KOL whose orders should be matched
+     * @param _maxIterations Maximum number of matching attempts
+     */
+    function forceMatchOrders(
+        uint256 _kolId,
+        uint256 _maxIterations
+    ) external returns (uint256) {
+        uint256 matchCount = 0;
+        uint256 iterations = 0;
+
+        // This is a simplified version that would need optimization
+        // Get all LONG orders for this KOL
+        uint256[] storage longOrders = orderIndex[_kolId][true][0]; // 0 is a placeholder
+
+        for (
+            uint256 i = 0;
+            i < longOrders.length && iterations < _maxIterations;
+            i++
+        ) {
+            Order storage order = orders[longOrders[i]];
+            if (
+                order.status == OrderStatus.ACTIVE ||
+                order.status == OrderStatus.PARTIAL_FILLED
+            ) {
+                _matchOrder(order.positionId);
+                matchCount++;
+            }
+            iterations++;
+        }
+
+        return matchCount;
+    }
+
+    /**
+     * @dev Get order details
+     * @param _orderId ID of the order to query
+     */
+    function getOrderDetails(
+        uint256 _orderId
+    )
+        external
+        view
+        returns (
+            address trader,
+            uint256 _kolId,
+            bool isLong,
+            uint256 mindshareValue,
+            uint256 quantity,
+            uint256 filledQuantity,
+            OrderStatus status
+        )
+    {
+        Order storage order = orders[_orderId];
+        return (
+            order.trader,
+            order.kolId,
+            order.isLong,
+            order.mindshareValue,
+            order.quantity,
+            order.filledQuantity,
+            order.status
+        );
+    }
+
+    /**
+     * @dev Get count of active orders for a KOL
+     * @param _kolId KOL ID to query
+     */
+    function getActiveOrderCount(
+        uint256 _kolId
+    ) external view returns (uint256) {
+        return activeOrderCount[_kolId];
     }
 
     /**
@@ -313,32 +444,43 @@ contract YapOrderBook is AccessControl {
     function _getOraclePrice(
         uint256 _influencerId
     ) public view returns (uint256) {
-        // (, uint256 mindshareScore, , bool isStale) = oracle.getKOLData(
-        //     _influencerId
-        // );
-        // if (isStale) revert YOB__DATA_EXPIRED();
+        (, uint256 mindshareScore, , bool isStale) = oracle.getKOLData(
+            _influencerId
+        );
+        if (isStale) revert YOB__DATA_EXPIRED();
 
-        return (400000000000000000); // Scale to 18 decimals
+        return (mindshareScore * 1e18); // Scale to 18 decimals
     }
 
     /**
-     * @dev Adds liquidity to the liquidity pool.
-     * @param amount The amount of liquidity to add.
+     * @dev Update fee parameters (admin only function)
+     * @param _newFeePercentage New fee in basis points (e.g., 30 = 0.3%)
+     * @param _newFeeCollector New address to collect fees
      */
-    function addLiquidity(
+    function updateFeeParameters(
+        uint256 _newFeePercentage,
+        address _newFeeCollector
+    ) external {
+        // In production, add access control here
+        require(_newFeePercentage <= 100, "Fee too high"); // Max 1%
+        require(_newFeeCollector != address(0), "Invalid address");
+
+        feePercentage = _newFeePercentage;
+        feeCollector = _newFeeCollector;
+    }
+}
+
+interface IERC20 {
+    function transferFrom(
+        address sender,
+        address recipient,
         uint256 amount
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        usdc.safeTransferFrom(msg.sender, address(this), amount);
-        totalLiquidity += amount;
-    }
+    ) external returns (bool);
 
-    /**
-     * @dev Returns the minimum of two numbers.
-     * @param a The first number.
-     * @param b The second number.
-     * @return The minimum of the two numbers.
-     */
-    function min(uint256 a, uint256 b) internal pure returns (uint256) {
-        return a < b ? a : b;
-    }
+    function transfer(
+        address recipient,
+        uint256 amount
+    ) external returns (bool);
+
+    function balanceOf(address account) external view returns (uint256);
 }

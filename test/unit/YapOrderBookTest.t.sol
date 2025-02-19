@@ -91,38 +91,42 @@ contract YapOrderBookTest is Test {
             _head,
             100e18,
             false,
-            37000000000000000
+            400000000000000000
         );
-        // console.log("Alice position ID: ");
-        // console.logBytes32(alicePosId);
+        console.log("Alice position ID: ");
+        console.logBytes32(alicePosId);
         bytes32 bobPosId = getPositionId(
             bob,
-            head,
+            head + 1,
             100e18,
             true,
-            37000000000000000
+            400000000000000000
         );
-        // console.log("Bob position ID: ");
-        // console.logBytes32(bobPosId);
+        console.log("Bob position ID: ");
+        console.logBytes32(bobPosId);
         (, uint256 size, , ) = yap.positions(alice, alicePosId);
         (, uint256 _size, , ) = yap.positions(bob, bobPosId);
         assertEq(size, 100e18);
+
         assertEq(_size, 100e18);
-        assertEq(usdc.balanceOf(address(yap)), 200e18 + 1e18); // 1% fee on 100e18
+        assertEq(usdc.balanceOf(address(yap)), 200e18);
     }
 
     function test_partialMatch_withPool() public {
         // Seed liquidity pool
-        vm.prank(charlie);
-        usdc.approve(address(yap), 50e18);
-        vm.prank(charlie);
+        vm.startPrank(charlie);
+        usdc.approve(address(escrow), 50e18);
+        escrow.depositUserFund(50e18);
         yap.openPosition(50e18, true); // Adds to pool
 
+        vm.stopPrank();
+
         // Alice opens large short
-        vm.prank(alice);
-        usdc.approve(address(yap), 103e18);
-        vm.prank(alice);
+        vm.startPrank(alice);
+        usdc.approve(address(escrow), 103e18);
+        escrow.depositUserFund(103e18);
         yap.openPosition(100e18, false);
+        vm.stopPrank();
 
         console.log("fee collected:", yap.totalLiquidity());
 
@@ -134,16 +138,20 @@ contract YapOrderBookTest is Test {
 
     function test_positionProfit_andLoss() public {
         // Alice opens long
-        vm.prank(alice);
-        usdc.approve(address(yap), 100e18);
+        vm.startPrank(alice);
+        usdc.approve(address(escrow), 100e18);
+        escrow.depositUserFund(100e18);
         (uint256 head, ) = yap.shortQueue();
-        vm.prank(alice);
         yap.openPosition(100e18, true);
+        vm.stopPrank();
 
-        vm.prank(bob);
-        usdc.approve(address(yap), 102e18);
-        vm.prank(bob);
+        vm.startPrank(bob);
+        usdc.approve(address(escrow), 102e18);
+        escrow.depositUserFund(102e18);
         yap.openPosition(100e18, false);
+        vm.stopPrank();
+
+        uint256 mindshare = 400000000000000000;
 
         // Verify positions
         bytes32 alicePosId = getPositionId(
@@ -151,7 +159,7 @@ contract YapOrderBookTest is Test {
             head,
             100e18,
             true,
-            37000000000000000
+            mindshare
         );
 
         console.log("Alice position ID: ");
