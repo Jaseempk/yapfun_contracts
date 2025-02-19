@@ -6,14 +6,15 @@ import {IYapEscrow} from "./interfaces/IYapEscrow.sol";
 import {IYapOracle} from "./interfaces/IYapOracle.sol";
 
 /**
- * @title MindshareOrderBook
- * @dev An onchain orderbook for trading KOL mindshare positions
+ * @title yapfun
+ * @dev An onchain orderbook for trading KOL mindshare positions using Kaito data
  */
-contract MindshareOrderBook is AccessControl {
+contract YapFun is AccessControl {
     //error
-    error YOB__INVALIDORDERSIZE();
-    error YOB__INVALID_TRADER();
+    error YOB__INVALIDSIZE();
     error YOB__DATA_EXPIRED();
+    error YOB__INVALID_TRADER();
+    error YOB__INVALIDORDERSIZE();
 
     // Order status
     enum OrderStatus {
@@ -46,8 +47,7 @@ contract MindshareOrderBook is AccessControl {
 
     // Index orders by KOL and position type
     // kolId => isLong => mindshareValue => orderIds[]
-    mapping(uint256 => mapping(bool => mapping(uint256 => uint256[])))
-        private orderIndex;
+    mapping(bool => mapping(uint256 => uint256[])) private orderIndex;
 
     // Track active orders count by KOL
     mapping(uint256 => uint256) public activeOrderCount;
@@ -104,9 +104,9 @@ contract MindshareOrderBook is AccessControl {
         uint256 _kolId
     ) {
         stablecoin = IERC20(_stablecoin);
-        feeCollector = _feeCollector;
         escrow = IYapEscrow(_escrow);
         oracle = IYapOracle(yapOracle);
+        feeCollector = _feeCollector;
         kolId = _kolId;
     }
 
@@ -119,13 +119,10 @@ contract MindshareOrderBook is AccessControl {
         bool _isLong,
         uint256 _quantity
     ) external returns (uint256) {
-        require(_quantity > 0, "Quantity must be positive");
+        if (_quantity < 0) revert YOB__INVALIDSIZE();
 
         // Transfer stablecoin to contract
-        require(
-            stablecoin.transferFrom(msg.sender, address(this), _quantity),
-            "Transfer failed"
-        );
+        escrow.fulfillOrder(_quantity, msg.sender, address(this));
 
         // Create the order
         uint256 orderId = nextOrderId++;
@@ -142,7 +139,7 @@ contract MindshareOrderBook is AccessControl {
         order.status = OrderStatus.ACTIVE;
 
         // Index the order
-        orderIndex[kolId][_isLong][_mindshareValue].push(orderId);
+        orderIndex[_isLong][_mindshareValue].push(orderId);
         activeOrderCount[kolId]++;
 
         emit OrderCreated(
@@ -268,9 +265,9 @@ contract MindshareOrderBook is AccessControl {
         bool oppositePosition = !order.isLong;
 
         // Get possible matching orders
-        uint256[] storage matchingOrderIds = orderIndex[order.kolId][
-            oppositePosition
-        ][order.mindshareValue];
+        uint256[] storage matchingOrderIds = orderIndex[oppositePosition][
+            order.mindshareValue
+        ];
 
         // Match against available orders
         for (
@@ -328,12 +325,10 @@ contract MindshareOrderBook is AccessControl {
 
     /**
      * @dev Get best matching orders for a specific KOL and position
-     * @param _kolId The KOL whose mindshare is being queried
      * @param _isLong Whether to get LONG (true) or SHORT (false) orders
      * @param _limit Maximum number of orders to return
      */
     function getBestOrders(
-        uint256 _kolId,
         bool _isLong,
         uint256 _limit
     ) external view returns (uint256[] memory) {
@@ -345,7 +340,7 @@ contract MindshareOrderBook is AccessControl {
 
         // In a real implementation, you would iterate through mindshare values
         // in order of preference (best price first)
-        uint256[] storage potentialOrders = orderIndex[_kolId][_isLong][0]; // 0 is a placeholder
+        uint256[] storage potentialOrders = orderIndex[_isLong][0]; // 0 is a placeholder
 
         for (uint256 i = 0; i < potentialOrders.length && count < _limit; i++) {
             uint256 orderId = potentialOrders[i];
@@ -363,11 +358,9 @@ contract MindshareOrderBook is AccessControl {
 
     /**
      * @dev Force match all eligible orders for a KOL
-     * @param _kolId KOL whose orders should be matched
      * @param _maxIterations Maximum number of matching attempts
      */
     function forceMatchOrders(
-        uint256 _kolId,
         uint256 _maxIterations
     ) external returns (uint256) {
         uint256 matchCount = 0;
@@ -375,7 +368,7 @@ contract MindshareOrderBook is AccessControl {
 
         // This is a simplified version that would need optimization
         // Get all LONG orders for this KOL
-        uint256[] storage longOrders = orderIndex[_kolId][true][0]; // 0 is a placeholder
+        uint256[] storage longOrders = orderIndex[true][0]; // 0 is a placeholder
 
         for (
             uint256 i = 0;
