@@ -197,6 +197,7 @@ contract YapFun is AccessControl {
         int256 pnl = _calculatePnL(pos, currentPrice);
 
         emit PositionClosed(msg.sender, address(this), pnl, positionId);
+        _removeFromOrderIndex(positionId, pos.isLong, pos.mindshareValue);
 
         delete orders[positionId];
 
@@ -339,6 +340,41 @@ contract YapFun is AccessControl {
                 address(this),
                 order.trader
             );
+        }
+    }
+
+    /**
+     * @dev Removes an order ID from the orderIndex mapping
+     * @param orderId Order ID to remove
+     * @param isLong Position type
+     * @param mindshareValue Mindshare value
+     */
+    function _removeFromOrderIndex(
+        uint256 orderId,
+        bool isLong,
+        uint256 mindshareValue
+    ) internal {
+        uint256[] storage orderList = orderIndex[isLong][mindshareValue];
+
+        // Find the index of the order ID in the array
+        for (uint256 i = 0; i < orderList.length; i++) {
+            if (orderList[i] == orderId) {
+                // Replace with the last element and pop (gas efficient way to remove from array)
+                if (i != orderList.length - 1) {
+                    orderList[i] = orderList[orderList.length - 1];
+                }
+                orderList.pop();
+
+                // Update active order count if needed
+                if (
+                    orders[orderId].status == OrderStatus.ACTIVE ||
+                    orders[orderId].status == OrderStatus.PARTIAL_FILLED
+                ) {
+                    activeOrderCount[kolId]--;
+                }
+
+                break;
+            }
         }
     }
 
