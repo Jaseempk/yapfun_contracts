@@ -21,6 +21,8 @@ contract YapEscrow is AccessControl {
      */
     error YE__InsufficientUserLockedBalance();
 
+    error YE__InsufficientDeposit();
+
     bytes32 public constant WHITELIST_ROLE = keccak256("WHITELIST_ROLE");
     bytes32 public constant FACTORY_ROLE = keccak256("FACTORY_ROLE");
 
@@ -100,6 +102,7 @@ contract YapEscrow is AccessControl {
      * @param amountToDeposit The amount of USDC to deposit.
      */
     function depositUserFund(uint256 amountToDeposit) external {
+        if (amountToDeposit == 0) revert YE__InsufficientDeposit();
         userToBalance[msg.sender] += amountToDeposit; // Updating the user's balance with the deposited amount
         emit UserFundDeposited(
             msg.sender,

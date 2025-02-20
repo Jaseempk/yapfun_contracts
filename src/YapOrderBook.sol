@@ -4,7 +4,6 @@ pragma solidity ^0.8.17;
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {IYapEscrow} from "./interfaces/IYapEscrow.sol";
 import {IYapOracle} from "./interfaces/IYapOracle.sol";
-import {console} from "forge-std/console.sol";
 
 /**
  * @title yapfun
@@ -165,7 +164,7 @@ contract YapOrderBook is AccessControl {
         Order storage order = orders[_orderId];
         if (order.trader != msg.sender) revert YOB__CallerIsNotTrader();
         if (
-            order.status != OrderStatus.ACTIVE ||
+            order.status != OrderStatus.ACTIVE &&
             order.status != OrderStatus.PARTIAL_FILLED
         ) revert YOB__InvalidOrder();
 
@@ -193,24 +192,26 @@ contract YapOrderBook is AccessControl {
     ) external onlyRole(DEFAULT_ADMIN_ROLE) {
         Order storage pos = orders[positionId];
         // if (msg.sender != pos.trader) revert YOB__INVALID_TRADER();
-        if (pos.filledQuantity <= 0) revert YOB__OrderYetToBeFilled();
         if (block.timestamp < expiryDuration)
             revert YOB__CantCloseBeforeExpiry();
+        if (pos.filledQuantity <= 0) {
+            emit PositionClosed(msg.sender, address(this), 0, positionId);
+            _removeFromOrderIndex(positionId, pos.isLong, pos.mindshareValue);
 
-        uint256 currentPrice = _getOraclePrice(kolId);
-        console.log("currentPrice:", currentPrice);
+            delete orders[positionId];
+        } else {
+            uint256 currentPrice = _getOraclePrice(kolId);
 
-        int256 pnl = _calculatePnL(pos, currentPrice);
+            int256 pnl = _calculatePnL(pos, currentPrice);
 
-        console.log("pnl:", pnl);
+            emit PositionClosed(msg.sender, address(this), pnl, positionId);
+            _removeFromOrderIndex(positionId, pos.isLong, pos.mindshareValue);
 
-        emit PositionClosed(msg.sender, address(this), pnl, positionId);
-        _removeFromOrderIndex(positionId, pos.isLong, pos.mindshareValue);
+            delete orders[positionId];
 
-        delete orders[positionId];
-
-        // Deduct losses from collateral or add profits
-        _settlePnL(msg.sender, pnl, pos.filledQuantity);
+            // Deduct losses from collateral or add profits
+            _settlePnL(msg.sender, pnl, pos.filledQuantity);
+        }
     }
 
     /**
@@ -223,7 +224,7 @@ contract YapOrderBook is AccessControl {
         if (pnl > 0) {
             if (stablecoin.balanceOf(address(this)) < uint256(pnl))
                 revert YOB__Insufficient_Liquidity();
-            console.log("hey");
+
             escrow.settlePnL(trader, size + uint256(pnl), address(this));
         } else {
             escrow.settlePnL(trader, size - uint256(-pnl), address(this));
