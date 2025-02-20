@@ -210,4 +210,12 @@ contract YapEscrow is AccessControl {
     ) external onlyRole(DEFAULT_ADMIN_ROLE) {
         revokeRole(WHITELIST_ROLE, marketOB); // Revoking the whitelist role from the specified market address
     }
+
+    /// @notice Returns the balance of a specific user in the escrow contract
+    /// @dev This function reads from the userToBalance mapping
+    /// @param user The address of the user whose balance is being queried
+    /// @return uint256 The current balance of the specified user
+    function getUserBalance(address user) external view returns (uint256) {
+        return userToBalance[user];
+    }
 }

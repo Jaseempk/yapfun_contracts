@@ -12,7 +12,6 @@ contract YapOrderBookFactory is AccessControl {
 
     IYapEscrow yapEscrow;
 
-    uint256 public constant TRADE_LIFECYCLE = 3 days;
     address public constant USDC_ADDRESS =
         0x081827b8C3Aa05287b5aA2bC3051fbE638F33152;
     YapOrderBook newMarket;
@@ -35,12 +34,11 @@ contract YapOrderBookFactory is AccessControl {
         if (_oracle == address(0)) revert YOBF__InvalidOracle();
         if (kolId <= 0) revert YOBF__InvalidKolId();
         newMarket = new YapOrderBook(
-            kolId,
-            TRADE_LIFECYCLE,
             USDC_ADDRESS,
+            address(this),
+            address(yapEscrow),
             _oracle,
-            msg.sender,
-            address(yapEscrow)
+            kolId
         );
         emit NewMarketInitialisedAndWhitelisted(
             kolId,

@@ -70,6 +70,8 @@ interface IYapEscrow is IAccessControl {
         address market
     ) external;
 
+    function getUserBalance(address user) external;
+
     function whiteListmarketOB(address marketOB) external;
 
     function removeWhiteListmarketOB(address marketOB) external;

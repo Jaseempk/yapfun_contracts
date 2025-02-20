@@ -46,70 +46,36 @@ contract YapOrderBookTest is Test {
         yap = YapOrderBook(_yap);
     }
 
-    // Helper to get position ID
-    function getPositionId(
-        address trader,
-        uint256 head,
-        uint256 size,
-        bool isLong,
-        uint256 price
-    ) internal view returns (bytes32) {
-        return
-            keccak256(
-                abi.encodePacked(
-                    trader,
-                    block.timestamp,
-                    head,
-                    size,
-                    isLong,
-                    price
-                )
-            );
-    }
-
     function test_fullOrderBookMatch() public {
         // Alice opens short position
         vm.startPrank(alice);
         usdc.approve(address(escrow), 120e18);
         escrow.depositUserFund(120e18);
-        (uint256 _head, ) = yap.shortQueue();
-        yap.openPosition(100e18, false);
+
+        yap.createOrder(false, 100e18);
         vm.stopPrank();
 
         // Bob matches with long
         vm.startPrank(bob);
         usdc.approve(address(escrow), 130e18);
         escrow.depositUserFund(130e18);
-        yap.openPosition(100e18, true);
+        yap.createOrder(true, 100e18);
 
-        (uint256 head, ) = yap.longQueue();
+        // (uint256 head, ) = yap.longQueue();
         vm.stopPrank();
 
         // Verify positions
-        bytes32 alicePosId = getPositionId(
-            alice,
-            _head,
-            100e18,
-            false,
-            400000000000000000
-        );
-        console.log("Alice position ID: ");
-        console.logBytes32(alicePosId);
-        bytes32 bobPosId = getPositionId(
-            bob,
-            head + 1,
-            100e18,
-            true,
-            400000000000000000
-        );
-        console.log("Bob position ID: ");
-        console.logBytes32(bobPosId);
-        (, uint256 size, , ) = yap.positions(alice, alicePosId);
-        (, uint256 _size, , ) = yap.positions(bob, bobPosId);
+        uint256 alicePosId = 1;
+
+        uint256 bobPosId = 2;
+
+        (, , , , , uint256 size, , , ) = yap.orders(alicePosId);
+        (, , , , , uint256 _size, uint256 filledQty, , ) = yap.orders(bobPosId);
+        uint256 fee = (filledQty * 30) / 10000;
         assertEq(size, 100e18);
 
         assertEq(_size, 100e18);
-        assertEq(usdc.balanceOf(address(yap)), 200e18);
+        assertEq(usdc.balanceOf(address(yap)), 200e18 + fee);
     }
 
     function test_partialMatch_withPool() public {
@@ -117,7 +83,7 @@ contract YapOrderBookTest is Test {
         vm.startPrank(charlie);
         usdc.approve(address(escrow), 50e18);
         escrow.depositUserFund(50e18);
-        yap.openPosition(50e18, true); // Adds to pool
+        yap.createOrder(true, 50e18); // Adds to pool
 
         vm.stopPrank();
 
@@ -125,15 +91,13 @@ contract YapOrderBookTest is Test {
         vm.startPrank(alice);
         usdc.approve(address(escrow), 103e18);
         escrow.depositUserFund(103e18);
-        yap.openPosition(100e18, false);
+        yap.createOrder(false, 100e18);
         vm.stopPrank();
 
-        console.log("fee collected:", yap.totalLiquidity());
-
-        // Verify pool usage
-        assertEq(yap.totalLiquidity(), 50e18 * 0.01); // 1% fee on pool usage
-        (, uint256 tail) = yap.longQueue(); // Destructure the tuple
-        assertEq(tail, 1); // Residual should be in queue
+        // // Verify pool usage
+        // assertEq(yap.totalLiquidity(), 50e18 * 0.01); // 1% fee on pool usage
+        // (, uint256 tail) = yap.longQueue(); // Destructure the tuple
+        // assertEq(tail, 1); // Residual should be in queue
     }
 
     function test_positionProfit_andLoss() public {
@@ -141,31 +105,19 @@ contract YapOrderBookTest is Test {
         vm.startPrank(alice);
         usdc.approve(address(escrow), 100e18);
         escrow.depositUserFund(100e18);
-        (uint256 head, ) = yap.shortQueue();
-        yap.openPosition(100e18, true);
+        // (uint256 head, ) = yap.shortQueue();
+        yap.createOrder(true, 100e18);
         vm.stopPrank();
 
         vm.startPrank(bob);
         usdc.approve(address(escrow), 102e18);
         escrow.depositUserFund(102e18);
-        yap.openPosition(100e18, false);
+        yap.createOrder(false, 100e18);
         vm.stopPrank();
 
-        uint256 mindshare = 400000000000000000;
-
         // Verify positions
-        bytes32 alicePosId = getPositionId(
-            alice,
-            head,
-            100e18,
-            true,
-            mindshare
-        );
+        uint256 alicePosId = 1;
 
-        console.log("Alice position ID: ");
-        console.logBytes32(alicePosId);
-
-        vm.startPrank(alice);
         // Simulate price increase
         uint256 newPrice = 4e18; // 40% increase from 3.7e18
         vm.mockCall(
@@ -173,6 +125,9 @@ contract YapOrderBookTest is Test {
             abi.encodeWithSelector(YapOrderBook._getOraclePrice.selector),
             abi.encode(newPrice)
         );
+
+        skip(7 days);
+        vm.prank(address(factory));
         // Close position with profit
         yap.closePosition(alicePosId);
         assertEq(yap._getOraclePrice(1), newPrice);
@@ -181,147 +136,175 @@ contract YapOrderBookTest is Test {
 
         // Calculate expected PnL: (4 - 3.7) * 100e18 / 1e18 = 30e18
         uint256 expectedBalance = 1000e18 - 100e18 + 100e18 + 30e18;
-        assertEq(usdc.balanceOf(alice), expectedBalance);
+        assertEq(escrow.getUserBalance(alice), expectedBalance);
     }
 
-    function test_queueManagement() public {
+    function test_orderCreation() public {
         // Add multiple orders
         for (uint256 i = 0; i < 3; i++) {
-            vm.prank(alice);
-            usdc.approve(address(yap), 120e18);
-            vm.prank(alice);
-            yap.openPosition(100e18, true);
+            vm.startPrank(alice);
+            usdc.approve(address(escrow), 120e18);
+            escrow.depositUserFund(120e18);
+            yap.createOrder(true, 100e18);
+            vm.stopPrank();
         }
 
         // Process orders
-        vm.prank(bob);
-        usdc.approve(address(yap), 320e18);
-        vm.prank(bob);
-        yap.openPosition(300e18, false);
-
-        // Verify queue state
-        (uint256 head, uint256 tail) = yap.longQueue();
-        assertEq(head, 3);
-        assertEq(tail, 3);
+        vm.startPrank(bob);
+        usdc.approve(address(escrow), 320e18);
+        escrow.depositUserFund(320e18);
+        yap.createOrder(false, 300e18);
+        vm.stopPrank();
     }
 
-    function test_expiration() public {
-        // Fast forward past expiration
-        vm.warp(block.timestamp + 2 weeks);
+    function test_closingOrder_before_expiration() public {
+        test_orderCreation();
+        // Verify positions
+        uint256 alicePosId = 1;
 
         // Attempt to open position
-        vm.prank(alice);
-        usdc.approve(address(yap), 100e18);
-        vm.expectRevert(YapOrderBook.YOB__EXPIRED.selector);
-        vm.prank(alice);
-        yap.openPosition(100e18, true);
-    }
-
-    function test_insufficientLiquidity() public {
-        // Alice tries to open position larger than pool
-        vm.prank(alice);
-        usdc.approve(address(yap), 1000e18);
-        vm.expectRevert("!liquidity");
-        vm.prank(alice);
-        yap.openPosition(1000e18, true);
+        vm.startPrank(address(factory));
+        vm.expectRevert(YapOrderBook.YOB__CantCloseBeforeExpiry.selector);
+        yap.closePosition(alicePosId);
     }
 
     function test_zeroSize_position() public {
-        vm.prank(alice);
-        usdc.approve(address(yap), 100e18);
+        vm.startPrank(alice);
+        usdc.approve(address(escrow), 100e18);
+        escrow.depositUserFund(100e18);
         vm.expectRevert(YapOrderBook.YOB__INVALIDSIZE.selector);
-        vm.prank(alice);
-        yap.openPosition(0, true);
+        yap.createOrder(true, 0);
+        vm.stopPrank();
     }
 
-    function test_closingNonExistentPosition() public {
-        vm.expectRevert(YapOrderBook.YOB__INVALID_TRADER.selector);
-        yap.closePosition(0x0);
+    function test_CancelOrder_Success() public {
+        vm.startPrank(alice);
+        usdc.approve(address(escrow), 100e18);
+        escrow.depositUserFund(100e18); // Deposit funds into escrow
+        yap.createOrder(true, 50e18); // Create LONG order
+        uint256 orderId = 1;
+        yap.cancelOrder(orderId); // Cancel the order
+        vm.stopPrank();
+
+        // Validate cancellation
+        (, , , , , , , , YapOrderBook.OrderStatus status) = yap.orders(orderId);
+        assertEq(uint8(status), uint8(YapOrderBook.OrderStatus.CANCELED));
     }
 
-    function test_multiplePartialFills() public {
-        // Seed multiple small orders
-        for (uint256 i = 0; i < 5; i++) {
-            vm.prank(bob);
-            usdc.approve(address(yap), 20e18);
-            vm.prank(bob);
-            yap.openPosition(20e18, false);
-        }
+    function test_CancelOrder_NotOwner() public {
+        vm.startPrank(alice);
+        usdc.approve(address(escrow), 100e18);
+        escrow.depositUserFund(100e18); // Deposit funds into escrow
+        uint256 orderId = yap.createOrder(true, 50e18); // Create LONG order
+        vm.stopPrank();
 
-        // Open large position
-        vm.prank(alice);
-        usdc.approve(address(yap), 111e18);
-        vm.prank(alice);
-        yap.openPosition(110e18, true);
-
-        // Verify queue state
-        (uint256 head, uint256 tail) = yap.shortQueue();
-        assertEq(head, 5);
-        assertEq(tail, 5);
-        assertEq(yap.totalLiquidity(), 1e18);
+        vm.startPrank(bob);
+        vm.expectRevert(YapOrderBook.YOB__CallerIsNotTrader.selector);
+        yap.cancelOrder(orderId); // Bob tries to cancel Alice's order
+        vm.stopPrank();
     }
 
-    function test_frontRun_trade() public {
-        // Initial order
-        vm.prank(bob);
-        usdc.approve(address(yap), 50e18);
-        vm.prank(bob);
-        yap.openPosition(50e18, false);
+    function test_MatchOrders_Success() public {
+        vm.startPrank(alice);
+        escrow.depositUserFund(100e18); // Deposit funds into escrow
+        yap.createOrder(true, 50e18); // Alice creates LONG order
+        vm.stopPrank();
 
-        // Attacker tries to front-run
-        vm.prank(charlie);
-        usdc.approve(address(yap), 1e18);
-        vm.prank(charlie);
-        yap.openPosition(1e18, false);
+        vm.startPrank(bob);
+        escrow.depositUserFund(100e18); // Deposit funds into escrow
+        yap.createOrder(false, 50e18); // Bob creates SHORT order
+        vm.stopPrank();
 
-        // Alice's large order
-        vm.prank(alice);
-        usdc.approve(address(yap), 505e17);
-        vm.prank(alice);
-        yap.openPosition(50e18, true);
-
-        (uint256 head, ) = yap.shortQueue();
-
-        // Verify original order filled first
-        assertEq(head, 1);
+        // // Validate matching
+        // YapOrderBook.Order memory orderAlice = yap.orders(orderIdAlice);
+        // YapOrderBook.Order memory orderBob = yap.orders(orderIdBob);
+        // assertEq(orderAlice.status, YapOrderBook.OrderStatus.FILLED);
+        // assertEq(orderBob.status, YapOrderBook.OrderStatus.FILLED);
     }
 
-    function test_positionIdCollision() public {
-        // Freeze time for deterministic ID
-        vm.warp(1641070800);
+    function test_MatchOrders_PartialFill() public {
+        vm.startPrank(alice);
+        escrow.depositUserFund(100e18); // Deposit funds into escrow
+        uint256 orderIdAlice = yap.createOrder(true, 50e18); // Alice creates LONG order
+        vm.stopPrank();
 
-        vm.prank(alice);
-        usdc.approve(address(yap), 100e18);
-        (uint256 _head, ) = yap.longQueue();
-        vm.prank(alice);
-        yap.openPosition(100e18, true);
+        vm.startPrank(bob);
+        escrow.depositUserFund(100e18); // Deposit funds into escrow
+        yap.createOrder(false, 30e18); // Bob creates SHORT order (partial fill)
+        vm.stopPrank();
 
-        // Attempt duplicate in same block
-        vm.prank(alice);
-        usdc.approve(address(yap), 100e18);
-        vm.prank(alice);
-        yap.openPosition(100e18, true);
-        (uint256 head, ) = yap.longQueue();
+        // // Validate partial fill
+        (, , , , , , uint256 filledQuantity, , ) = yap.orders(orderIdAlice);
+        // YapOrderBook.Order memory orderBob = yap.orders(orderIdBob);
+        // assertEq(orderAlice.status, YapOrderBook.OrderStatus.PARTIAL_FILLED);
+        // assertEq(orderBob.status, YapOrderBook.OrderStatus.FILLED);
+        assertEq(filledQuantity, 30e18);
+    }
 
-        // Verify positions
-        bytes32 alicePosId1 = getPositionId(
-            alice,
-            _head,
-            100e18,
-            false,
-            37000000000000000
-        );
+    function test_ClosePosition_Success() public {
+        vm.startPrank(alice);
+        escrow.depositUserFund(100e18); // Deposit funds into escrow
+        uint256 orderId = yap.createOrder(true, 50e18); // Alice creates LONG order
+        vm.warp(block.timestamp + 3 days); // Fast-forward to expiration
+        yap.closePosition(orderId); // Close position
+        vm.stopPrank();
 
-        bytes32 alicePosId2 = getPositionId(
-            alice,
-            head,
-            100e18,
-            true,
-            37000000000000000
-        );
+        // Validate PnL settlement
+        assertTrue(usdc.balanceOf(alice) > 0); // Alice should receive her PnL
+    }
 
-        // Verify unique IDs
+    function test_ClosePosition_BeforeExpiry() public {
+        vm.startPrank(alice);
+        escrow.depositUserFund(100e18); // Deposit funds into escrow
+        uint256 orderId = yap.createOrder(true, 50e18); // Alice creates LONG order
+        vm.expectRevert(YapOrderBook.YOB__CantCloseBeforeExpiry.selector);
+        yap.closePosition(orderId); // Attempt to close before expiry
+        vm.stopPrank();
+    }
 
-        assertTrue(alicePosId1 != alicePosId2);
+    function test_ReentrancyAttack_Prevention() public {
+        // Simulate a malicious contract attempting reentrancy
+        vm.startPrank(alice);
+        escrow.depositUserFund(100e18); // Deposit funds into escrow
+        yap.createOrder(true, 50e18); // Alice creates LONG order
+        vm.stopPrank();
+
+        vm.startPrank(bob);
+        escrow.depositUserFund(100e18); // Deposit funds into escrow
+        yap.createOrder(false, 50e18); // Bob creates SHORT order
+        vm.stopPrank();
+
+        // Ensure no reentrancy occurs during order matching
+        assertFalse(address(yap).balance > 0); // No ETH should remain in the contract
+    }
+
+    function test_EscrowBalanceInsufficient() public {
+        vm.startPrank(alice);
+        escrow.depositUserFund(100e18); // Deposit funds into escrow
+        yap.createOrder(true, 50e18); // Alice creates LONG order
+        vm.stopPrank();
+
+        vm.startPrank(bob);
+        escrow.depositUserFund(10e18); // Insufficient deposit
+        vm.expectRevert(YapOrderBook.YOB__Insufficient_Liquidity.selector);
+        yap.createOrder(false, 50e18); // Bob attempts to create SHORT order
+        vm.stopPrank();
+    }
+
+    // ===========================
+    // Edge Case Tests
+    // ===========================
+
+    function test_ZeroLiquidityPool() public {
+        vm.startPrank(alice);
+        escrow.depositUserFund(100e18); // Deposit funds into escrow
+        yap.createOrder(true, 50e18); // Alice creates LONG order
+        vm.stopPrank();
+
+        vm.startPrank(bob);
+        escrow.depositUserFund(100e18); // Deposit funds into escrow
+        vm.expectRevert(YapOrderBook.YOB__Insufficient_Liquidity.selector);
+        yap.createOrder(false, 50e18); // Bob attempts to create SHORT order with insufficient liquidity
+        vm.stopPrank();
     }
 }

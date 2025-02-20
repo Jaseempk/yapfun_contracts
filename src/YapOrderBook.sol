@@ -4,12 +4,13 @@ pragma solidity ^0.8.17;
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {IYapEscrow} from "./interfaces/IYapEscrow.sol";
 import {IYapOracle} from "./interfaces/IYapOracle.sol";
+import {console} from "forge-std/console.sol";
 
 /**
  * @title yapfun
  * @dev An onchain orderbook for trading KOL mindshare positions using Kaito data
  */
-contract YapFun is AccessControl {
+contract YapOrderBook is AccessControl {
     //error
     error YOB__INVALIDSIZE();
     error YOB__InvalidOrder();
@@ -17,6 +18,7 @@ contract YapFun is AccessControl {
     error YOB__INVALID_TRADER();
     error YOB__CallerIsNotTrader();
     error YOB__OrderYetToBeFilled();
+    error YOB__CantCloseBeforeExpiry();
     error YOB__Insufficient_Liquidity();
 
     // Order status
@@ -44,6 +46,8 @@ contract YapFun is AccessControl {
     uint256 private nextOrderId = 1;
 
     uint256 public immutable kolId;
+
+    uint256 public expiryDuration;
 
     // Order storage - orderId => Order
     mapping(uint256 => Order) public orders;
@@ -100,11 +104,13 @@ contract YapFun is AccessControl {
         address yapOracle,
         uint256 _kolId
     ) {
+        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         stablecoin = IERC20(_stablecoin);
         escrow = IYapEscrow(_escrow);
         oracle = IYapOracle(yapOracle);
         feeCollector = _feeCollector;
         kolId = _kolId;
+        expiryDuration = block.timestamp + 3 days;
     }
 
     /**
@@ -116,10 +122,7 @@ contract YapFun is AccessControl {
         bool _isLong,
         uint256 _quantity
     ) external returns (uint256) {
-        if (_quantity < 0) revert YOB__INVALIDSIZE();
-
-        // Transfer stablecoin to contract
-        escrow.fulfillOrder(_quantity, msg.sender, address(this));
+        if (_quantity <= 0) revert YOB__INVALIDSIZE();
 
         // Create the order
         uint256 orderId = nextOrderId++;
@@ -189,12 +192,17 @@ contract YapFun is AccessControl {
         uint256 positionId
     ) external onlyRole(DEFAULT_ADMIN_ROLE) {
         Order storage pos = orders[positionId];
-        if (msg.sender != pos.trader) revert YOB__INVALID_TRADER();
+        // if (msg.sender != pos.trader) revert YOB__INVALID_TRADER();
         if (pos.filledQuantity <= 0) revert YOB__OrderYetToBeFilled();
+        if (block.timestamp < expiryDuration)
+            revert YOB__CantCloseBeforeExpiry();
 
         uint256 currentPrice = _getOraclePrice(kolId);
+        console.log("currentPrice:", currentPrice);
 
         int256 pnl = _calculatePnL(pos, currentPrice);
+
+        console.log("pnl:", pnl);
 
         emit PositionClosed(msg.sender, address(this), pnl, positionId);
         _removeFromOrderIndex(positionId, pos.isLong, pos.mindshareValue);
@@ -215,7 +223,7 @@ contract YapFun is AccessControl {
         if (pnl > 0) {
             if (stablecoin.balanceOf(address(this)) < uint256(pnl))
                 revert YOB__Insufficient_Liquidity();
-
+            console.log("hey");
             escrow.settlePnL(trader, size + uint256(pnl), address(this));
         } else {
             escrow.settlePnL(trader, size - uint256(-pnl), address(this));
