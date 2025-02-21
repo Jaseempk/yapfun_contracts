@@ -132,9 +132,9 @@ contract YapOrderBookTest is Test {
         vm.prank(address(factory));
         // Close position with profit
         yap.closePosition(alicePosId);
-        assertEq(yap._getOraclePrice(1), newPrice);
+        assertEq(yap._getOraclePrice(), newPrice);
 
-        console.log("mocked price: ", yap._getOraclePrice(1));
+        console.log("mocked price: ", yap._getOraclePrice());
 
         // Calculate expected PnL: (4 - 3.7) * 100e18 / 1e18 = 30e18
         uint256 expectedBalance = 1000e18 - 100e18 + 100e18 + 30e18;

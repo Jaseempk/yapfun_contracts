@@ -17,6 +17,8 @@ contract YapOrderBook is AccessControl {
     error YOB__INVALID_TRADER();
     error YOB__CallerIsNotTrader();
     error YOB__OrderYetToBeFilled();
+    error YOB__MindshareArrayEmpty();
+    error YOB__CantResetActiveMarket();
     error YOB__CantCloseBeforeExpiry();
     error YOB__Insufficient_Liquidity();
 
@@ -44,9 +46,14 @@ contract YapOrderBook is AccessControl {
     // Counters for order IDs
     uint256 private nextOrderId = 1;
 
-    uint256 public immutable kolId;
+    // KOL identifier
+    uint256 private immutable kolId;
 
-    uint256 public expiryDuration;
+    // Market expiry timestamp
+    uint256 private expiryDuration;
+
+    // Total trading volume
+    uint256 public marketVolume;
 
     // Order storage - orderId => Order
     mapping(uint256 => Order) public orders;
@@ -61,12 +68,18 @@ contract YapOrderBook is AccessControl {
     // USDC/USDT interface
     IERC20 public stablecoin;
 
+    // Interface for the escrow contract that handles funds
     IYapEscrow public immutable escrow;
+
+    // Interface for the oracle contract that provides KOL data
     IYapOracle public immutable oracle;
 
     // Fee configuration
     uint256 public feePercentage = 30; // 0.3% fee (basis points)
     address public feeCollector;
+
+    //constants
+    uint32 public constant MARKET_DURATION = 3 days;
 
     // Events
     event OrderCreated(
@@ -90,6 +103,8 @@ contract YapOrderBook is AccessControl {
         int256 pnl,
         uint256 positionId
     );
+
+    event MarketReset(uint256 timestamp);
 
     /**
      * @dev Constructor
@@ -125,7 +140,7 @@ contract YapOrderBook is AccessControl {
 
         // Create the order
         uint256 orderId = nextOrderId++;
-        uint256 _mindshareValue = _getOraclePrice(kolId);
+        uint256 _mindshareValue = _getOraclePrice();
         Order storage order = orders[orderId];
         order.trader = msg.sender;
         order.positionId = orderId;
@@ -140,6 +155,7 @@ contract YapOrderBook is AccessControl {
         // Index the order
         orderIndex[_isLong][_mindshareValue].push(orderId);
         activeOrderCount[kolId]++;
+        marketVolume += _quantity;
 
         emit OrderCreated(
             orderId,
@@ -198,9 +214,14 @@ contract YapOrderBook is AccessControl {
             emit PositionClosed(msg.sender, address(this), 0, positionId);
             _removeFromOrderIndex(positionId, pos.isLong, pos.mindshareValue);
 
+            activeOrderCount[kolId]--;
+
             delete orders[positionId];
         } else {
-            uint256 currentPrice = _getOraclePrice(kolId);
+            if (pos.status == OrderStatus.PARTIAL_FILLED) {
+                activeOrderCount[kolId]--;
+            }
+            uint256 currentPrice = _getOraclePrice();
 
             int256 pnl = _calculatePnL(pos, currentPrice);
 
@@ -212,6 +233,26 @@ contract YapOrderBook is AccessControl {
             // Deduct losses from collateral or add profits
             _settlePnL(msg.sender, pnl, pos.filledQuantity);
         }
+    }
+
+    /// @notice Resets market state by clearing order indices for specified mindshares
+    /// @dev Can only be called by admin after market expiry
+    /// @param mindshares Array of mindshare IDs to reset orders for
+    /// @custom:throws YOB__CantResetActiveMarket if market has not expired yet
+    function resetMarket(
+        uint256[] calldata mindshares
+    ) public onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (mindshares.length == 0) revert YOB__MindshareArrayEmpty();
+        if (block.timestamp < expiryDuration)
+            revert YOB__CantResetActiveMarket();
+
+        emit MarketReset(block.timestamp);
+        for (uint i = 0; i < mindshares.length; i++) {
+            delete orderIndex[true][mindshares[i]];
+            delete orderIndex[false][mindshares[i]];
+        }
+        marketVolume = 1;
+        expiryDuration = block.timestamp + MARKET_DURATION;
     }
 
     /**
@@ -429,12 +470,8 @@ contract YapOrderBook is AccessControl {
      * @dev Gets the current price from the oracle.
      * @return The current price.
      */
-    function _getOraclePrice(
-        uint256 _influencerId
-    ) public view returns (uint256) {
-        (, uint256 mindshareScore, , bool isStale) = oracle.getKOLData(
-            _influencerId
-        );
+    function _getOraclePrice() public view returns (uint256) {
+        (, uint256 mindshareScore, , bool isStale) = oracle.getKOLData(kolId);
         if (isStale) revert YOB__DATA_EXPIRED();
 
         return (mindshareScore * 1e18); // Scale to 18 decimals
