@@ -363,7 +363,7 @@ contract YapOrderBookTest is Test {
             address trader = address(uint160(i + 1));
             vm.startPrank(trader);
             deal(address(usdc), trader, 100e18); // Fund each trader
-            usdc.approve(address(escrow), type(uint256).max); // Approve escrow
+            usdc.approve(address(escrow), 100); // Approve escrow
             escrow.depositUserFund(100e18); // Deposit funds into escrow
             yap.createOrder(i % 2 == 0, 50e18); // Alternate between LONG and SHORT
             vm.stopPrank();
@@ -372,10 +372,6 @@ contract YapOrderBookTest is Test {
         // Validate active order count
         assertEq(yap.getActiveOrderCount(), numOrders);
     }
-
-    // ===========================
-    // Fuzz Testing
-    // ===========================
 
     function testFuzz_CreateOrder_ValidSize(uint256 size) public {
         vm.assume(size > 0 && size <= 100e18); // Assume valid size range

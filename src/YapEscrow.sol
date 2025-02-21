@@ -23,6 +23,8 @@ contract YapEscrow is AccessControl {
 
     error YE__InsufficientDeposit();
 
+    error YE__InsufficientLockedBalance();
+
     bytes32 public constant WHITELIST_ROLE = keccak256("WHITELIST_ROLE");
     bytes32 public constant FACTORY_ROLE = keccak256("FACTORY_ROLE");
 
@@ -75,6 +77,18 @@ contract YapEscrow is AccessControl {
      * @param settlingAmount The amount of USDC transferred.
      */
     event PnLSettled(address user, address market, uint256 settlingAmount);
+
+    /**
+     * @dev Emitted when a user's balance is unlocked from escrow
+     * @param user Address of the user whose balance is being unlocked
+     * @param marketAddy Address of the marketplace contract
+     * @param balanceToFill Amount of tokens being unlocked
+     */
+    event UserBalanceUnlocked(
+        address user,
+        address marketAddy,
+        uint256 balanceToFill
+    );
 
     /**
      * @dev Mapping of user addresses to their balances.
@@ -176,6 +190,23 @@ contract YapEscrow is AccessControl {
         userToBalance[makerOrTakerAddy] -= balanceToFill; // Deducting the balance to fill from the user's balance
         marketToLockedBalance[makerOrTakerAddy][marketAddy] += balanceToFill; // Adding the balance to fill to the user's locked balance for the market
         emit UserBalanceLocked(makerOrTakerAddy, marketAddy, balanceToFill); // Emitting the user balance locked event
+    }
+
+    /// @notice Unlocks a specified amount of locked balance for a user after market expiry
+    /// @dev Can only be called by addresses with WHITELIST_ROLE
+    /// @param balanceToFill The amount of balance to unlock
+    /// @param marketAddy The address of the market where balance is locked
+    /// @param makerOrTakerAddy The address of the user (maker or taker) whose balance is being unlocked
+    function unlockBalanceUponExpiry(
+        uint256 balanceToFill,
+        address marketAddy,
+        address makerOrTakerAddy
+    ) external onlyRole(WHITELIST_ROLE) {
+        if (marketToLockedBalance[makerOrTakerAddy][marketAddy] < balanceToFill)
+            revert YE__InsufficientLockedBalance(); //throws YE__InsufficientLockedBalance if locked balance is less than requested amount
+        emit UserBalanceUnlocked(makerOrTakerAddy, marketAddy, balanceToFill); //emits UserBalanceUnlocked when balance is successfully unlocked
+        marketToLockedBalance[makerOrTakerAddy][marketAddy] -= balanceToFill;
+        userToBalance[makerOrTakerAddy] += balanceToFill;
     }
 
     /**

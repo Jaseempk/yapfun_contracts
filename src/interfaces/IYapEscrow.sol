@@ -70,6 +70,12 @@ interface IYapEscrow is IAccessControl {
         address market
     ) external;
 
+    function unlockBalanceUponExpiry(
+        uint256 balanceToFill,
+        address marketAddy,
+        address makerOrTakerAddy
+    ) external;
+
     function getUserBalance(address user) external;
 
     function whiteListmarketOB(address marketOB) external;

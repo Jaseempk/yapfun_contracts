@@ -15,6 +15,7 @@ contract YapOrderBook is AccessControl {
     error YOB__InvalidOrder();
     error YOB__DATA_EXPIRED();
     error YOB__INVALID_TRADER();
+    error YOB__InvalidPosition();
     error YOB__CallerIsNotTrader();
     error YOB__OrderYetToBeFilled();
     error YOB__MindshareArrayEmpty();
@@ -124,7 +125,7 @@ contract YapOrderBook is AccessControl {
         oracle = IYapOracle(yapOracle);
         feeCollector = _feeCollector;
         kolId = _kolId;
-        expiryDuration = block.timestamp + 3 days;
+        expiryDuration = block.timestamp + MARKET_DURATION;
     }
 
     /**
@@ -155,6 +156,7 @@ contract YapOrderBook is AccessControl {
         // Index the order
         orderIndex[_isLong][_mindshareValue].push(orderId);
         activeOrderCount[kolId]++;
+
         marketVolume += _quantity;
 
         emit OrderCreated(
@@ -195,7 +197,11 @@ contract YapOrderBook is AccessControl {
 
         // Refund remaining stablecoin
         if (refundAmount > 0) {
-            escrow.settlePnL(msg.sender, refundAmount, address(this));
+            escrow.unlockBalanceUponExpiry(
+                refundAmount,
+                msg.sender,
+                address(this)
+            );
         }
     }
 
@@ -210,16 +216,24 @@ contract YapOrderBook is AccessControl {
         // if (msg.sender != pos.trader) revert YOB__INVALID_TRADER();
         if (block.timestamp < expiryDuration)
             revert YOB__CantCloseBeforeExpiry();
-        if (pos.filledQuantity <= 0) {
+        if (pos.trader == address(0)) revert YOB__InvalidPosition();
+        if (pos.filledQuantity == 0) {
             emit PositionClosed(msg.sender, address(this), 0, positionId);
             _removeFromOrderIndex(positionId, pos.isLong, pos.mindshareValue);
-
-            activeOrderCount[kolId]--;
+            escrow.unlockBalanceUponExpiry(
+                pos.quantity,
+                pos.trader,
+                address(this)
+            );
 
             delete orders[positionId];
         } else {
-            if (pos.status == OrderStatus.PARTIAL_FILLED) {
-                activeOrderCount[kolId]--;
+            if ((pos.quantity - pos.filledQuantity) != 0) {
+                escrow.unlockBalanceUponExpiry(
+                    pos.quantity - pos.filledQuantity,
+                    pos.trader,
+                    address(this)
+                );
             }
             uint256 currentPrice = _getOraclePrice();
 
@@ -365,9 +379,7 @@ contract YapOrderBook is AccessControl {
         uint256 feeAmount = (order.filledQuantity * feePercentage) / 10000;
 
         // Update final status of the order
-        if (
-            order.filledQuantity == order.quantity && order.filledQuantity > 0
-        ) {
+        if (order.filledQuantity == order.quantity) {
             emit OrderFilled(_orderId, order.filledQuantity, address(0));
             escrow.fulfillOrder(
                 totalFilled + feeAmount,
@@ -380,6 +392,11 @@ contract YapOrderBook is AccessControl {
             emit OrderFilled(_orderId, order.filledQuantity, address(0));
             escrow.fulfillOrder(
                 totalFilled + feeAmount,
+                address(this),
+                order.trader
+            );
+            escrow.lockTheBalanceToFill(
+                order.quantity - totalFilled,
                 address(this),
                 order.trader
             );
