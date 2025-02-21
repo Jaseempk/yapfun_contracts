@@ -12,14 +12,14 @@ import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
  */
 contract YapEscrow is AccessControl {
     //Error
-    /**
-     * @dev Reverts if the user's balance is insufficient.
-     */
+
+    // @dev Reverts if the user's balance is insufficient.
     error YE__InsufficientUserBalance();
-    /**
-     * @dev Reverts if the user's locked balance is insufficient.
-     */
+
+    // @dev Reverts if the user's locked balance is insufficient.
     error YE__InsufficientUserLockedBalance();
+
+    error YE__IncorrectAmount();
 
     error YE__InsufficientDeposit();
 
@@ -90,6 +90,8 @@ contract YapEscrow is AccessControl {
         uint256 balanceToFill
     );
 
+    event UserDepositWithdrawn(address user, uint256 withdrawalAmount);
+
     /**
      * @dev Mapping of user addresses to their balances.
      */
@@ -118,6 +120,7 @@ contract YapEscrow is AccessControl {
     function depositUserFund(uint256 amountToDeposit) external {
         if (amountToDeposit == 0) revert YE__InsufficientDeposit();
         userToBalance[msg.sender] += amountToDeposit; // Updating the user's balance with the deposited amount
+
         emit UserFundDeposited(
             msg.sender,
             amountToDeposit,
@@ -146,7 +149,9 @@ contract YapEscrow is AccessControl {
             revert YE__InsufficientUserBalance(); // Reverting if the user's balance is insufficient
 
         userToBalance[makerOrTakerAddy] -= orderAmountFilled; // Deducting the order amount from the user's balance
+
         emit OrderFulFilled(marketAddress, makerOrTakerAddy, orderAmountFilled); // Emitting the order fulfillment event
+
         IERC20(usdcAddress).transfer(marketAddress, orderAmountFilled); // Transferring the order amount to the market address
     }
 
@@ -169,7 +174,9 @@ contract YapEscrow is AccessControl {
         marketToLockedBalance[makerOrTakerAddy][
             marketAddress
         ] -= orderAmountFilled; // Deducting the order amount from the user's locked balance for the market
+
         emit OrderFulFilled(marketAddress, makerOrTakerAddy, orderAmountFilled); // Emitting the order fulfillment event
+
         IERC20(usdcAddress).transfer(marketAddress, orderAmountFilled); // Transferring the order amount to the market address
     }
 
@@ -188,12 +195,13 @@ contract YapEscrow is AccessControl {
             revert YE__InsufficientUserBalance(); // Reverting if the user's balance is insufficient
 
         userToBalance[makerOrTakerAddy] -= balanceToFill; // Deducting the balance to fill from the user's balance
+
         marketToLockedBalance[makerOrTakerAddy][marketAddy] += balanceToFill; // Adding the balance to fill to the user's locked balance for the market
+
         emit UserBalanceLocked(makerOrTakerAddy, marketAddy, balanceToFill); // Emitting the user balance locked event
     }
 
     /// @notice Unlocks a specified amount of locked balance for a user after market expiry
-    /// @dev Can only be called by addresses with WHITELIST_ROLE
     /// @param balanceToFill The amount of balance to unlock
     /// @param marketAddy The address of the market where balance is locked
     /// @param makerOrTakerAddy The address of the user (maker or taker) whose balance is being unlocked
@@ -204,9 +212,12 @@ contract YapEscrow is AccessControl {
     ) external onlyRole(WHITELIST_ROLE) {
         if (marketToLockedBalance[makerOrTakerAddy][marketAddy] < balanceToFill)
             revert YE__InsufficientLockedBalance(); //throws YE__InsufficientLockedBalance if locked balance is less than requested amount
-        emit UserBalanceUnlocked(makerOrTakerAddy, marketAddy, balanceToFill); //emits UserBalanceUnlocked when balance is successfully unlocked
+
         marketToLockedBalance[makerOrTakerAddy][marketAddy] -= balanceToFill;
+
         userToBalance[makerOrTakerAddy] += balanceToFill;
+
+        emit UserBalanceUnlocked(makerOrTakerAddy, marketAddy, balanceToFill); //emits UserBalanceUnlocked when balance is successfully unlocked
     }
 
     /**
@@ -221,8 +232,33 @@ contract YapEscrow is AccessControl {
         address market
     ) external onlyRole(WHITELIST_ROLE) {
         userToBalance[makerOrTakerAddy] += settlingAmount; // Adding the settling amount to the user's balance
+
         emit PnLSettled(makerOrTakerAddy, market, settlingAmount); // Emitting the profit/loss settlement event
-        IERC20(usdcAddress).transfer(address(this), settlingAmount); // Transferring the settling amount to the contract address
+
+        IERC20(usdcAddress).transferFrom(market, address(this), settlingAmount); // Transferring the settling amount to the contract address
+    }
+
+    /// @notice Allows users to withdraw their deposited USDC
+    /// @dev Uses transferFrom to send USDC from contract to user
+    /// @param amountToWithdraw Amount of USDC tokens to withdraw
+    function withdrawDeposit(uint256 amountToWithdraw) public {
+        // Check if withdrawal amount is valid
+        if (amountToWithdraw == 0) revert YE__IncorrectAmount(); //throws YE__IncorrectAmount if amount is 0
+        // Check if user has sufficient balance
+        if (userToBalance[msg.sender] < amountToWithdraw)
+            revert YE__InsufficientUserBalance(); //throws YE__InsufficientUserBalance if user has insufficient balance
+
+        // Decrease user's balance
+        userToBalance[msg.sender] -= amountToWithdraw;
+
+        emit UserDepositWithdrawn(msg.sender, amountToWithdraw);
+
+        // Transfer USDC tokens from contract to user
+        IERC20(usdcAddress).transferFrom(
+            address(this),
+            msg.sender,
+            amountToWithdraw
+        );
     }
 
     /**
@@ -246,7 +282,6 @@ contract YapEscrow is AccessControl {
     }
 
     /// @notice Returns the balance of a specific user in the escrow contract
-    /// @dev This function reads from the userToBalance mapping
     /// @param user The address of the user whose balance is being queried
     /// @return uint256 The current balance of the specified user
     function getUserBalance(address user) external view returns (uint256) {

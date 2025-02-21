@@ -72,12 +72,12 @@ contract YapOrderBookTest is Test {
         uint256 bobPosId = 2;
 
         (, , , , , uint256 size, , , ) = yap.orders(alicePosId);
-        (, , , , , uint256 _size, uint256 filledQty, , ) = yap.orders(bobPosId);
-        uint256 fee = (filledQty * 30) / 10000;
+        (, , , , , uint256 _size, , , ) = yap.orders(bobPosId);
+
         assertEq(size, 100e18);
 
         assertEq(_size, 100e18);
-        assertEq(usdc.balanceOf(address(yap)), 200e18 + fee);
+        assertEq(usdc.balanceOf(address(yap)), 200e18);
     }
 
     function test_partialMatch_withPool() public {
@@ -129,6 +129,8 @@ contract YapOrderBookTest is Test {
         );
 
         skip(7 days);
+        vm.prank(address(yap));
+        usdc.approve(address(escrow), type(uint256).max);
         vm.prank(address(factory));
         // Close position with profit
         yap.closePosition(alicePosId);
@@ -383,5 +385,103 @@ contract YapOrderBookTest is Test {
 
         (, , , , , uint256 quanty, , , ) = yap.orders(orderId);
         assertEq(quanty, size);
+    }
+
+    function test_ResetMarket_Success() public {
+        // Add some orders to the order book
+        uint256[] memory mindshares = new uint256[](2);
+        mindshares[0] = 100;
+        mindshares[1] = 200;
+
+        vm.startPrank(alice);
+        usdc.approve(address(escrow), 350);
+        escrow.depositUserFund(350); // Deposit funds into escrow
+        // Populate orderIndex with dummy data
+        uint256 alicePosId1 = yap.createOrder(true, 100); // Creates an order with mindshare 100
+        uint256 alicePosId2 = yap.createOrder(false, 200); // Creates an order with mindshare 200
+        vm.stopPrank();
+
+        // Fast-forward past expiration
+        vm.warp(yap.expiryDuration() + 1);
+
+        vm.prank(address(yap));
+        usdc.approve(address(escrow), 400);
+
+        vm.startPrank(address(factory));
+        yap.closePosition(alicePosId1);
+        yap.closePosition(alicePosId2);
+
+        // Reset the market
+        yap.resetMarket(mindshares);
+
+        // Validate that orderIndex is cleared
+        assertTrue(yap.getOrderCountForMindshare(true, 100) == 0);
+        assertTrue(yap.getOrderCountForMindshare(false, 200) == 0);
+
+        // Validate market state reset
+        assertEq(yap.marketVolume(), 1);
+        assertTrue(yap.expiryDuration() > block.timestamp);
+
+        vm.stopPrank();
+    }
+
+    function test_ResetMarket_EmptyMindshareArray() public {
+        vm.startPrank(address(factory));
+
+        // Fast-forward past expiration
+        vm.warp(yap.expiryDuration() + 1);
+
+        // Attempt to reset with an empty array
+        uint256[] memory mindshares = new uint256[](0);
+        vm.expectRevert(YapOrderBook.YOB__MindshareArrayEmpty.selector);
+        yap.resetMarket(mindshares);
+
+        vm.stopPrank();
+    }
+
+    function test_ResetMarket_BeforeExpiration() public {
+        vm.startPrank(admin);
+
+        // Attempt to reset before expiration
+        uint256[] memory mindshares = new uint256[](1);
+        mindshares[0] = 100;
+
+        vm.expectRevert(YapOrderBook.YOB__CantResetActiveMarket.selector);
+        yap.resetMarket(mindshares);
+
+        vm.stopPrank();
+    }
+
+    function test_ResetMarket_WithNonExistentMindshares() public {
+        vm.startPrank(address(factory));
+
+        // Fast-forward past expiration
+        vm.warp(yap.expiryDuration() + 1);
+
+        // Attempt to reset with non-existent mindshares
+        uint256[] memory mindshares = new uint256[](2);
+        mindshares[0] = 999; // Non-existent mindshare
+        mindshares[1] = 888; // Non-existent mindshare
+
+        // This should not revert but will have no effect
+        yap.resetMarket(mindshares);
+
+        vm.stopPrank();
+    }
+
+    function test_ResetMarket_NonAdminCaller() public {
+        vm.startPrank(alice);
+
+        // Fast-forward past expiration
+        vm.warp(yap.expiryDuration() + 1);
+
+        uint256[] memory mindshares = new uint256[](1);
+        mindshares[0] = 100;
+
+        // Non-admin should not be able to call resetMarket
+        vm.expectRevert();
+        yap.resetMarket(mindshares);
+
+        vm.stopPrank();
     }
 }
