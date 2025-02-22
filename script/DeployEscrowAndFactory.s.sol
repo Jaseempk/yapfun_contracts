@@ -11,7 +11,7 @@ contract DeployEscrowAndFactory is Script {
 
     uint256 pk = vm.envUint("METAMASK_PRIVATE_KEY");
     address deployer = vm.addr(pk);
-    address usdc = 0x081827b8C3Aa05287b5aA2bC3051fbE638F33152;
+    address usdc = 0xC129124eA2Fd4D63C1Fc64059456D8f231eBbed1;
 
     function run() public {
         vm.startBroadcast(pk);

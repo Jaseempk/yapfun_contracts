@@ -1,107 +1,72 @@
-# YapFun
+# YapFun Protocol
 
-YapFun Protocol is a decentralized derivatives platform for trading Kaito Yaps' mindshare. It enables users to take long or short positions on KOLs based on their "mindshare score" through a hybrid liquidity model combining order book matching and liquidity pools.
+YapFun is a decentralized trading platform that lets you trade on the social influence of Key Opinion Leaders (KOLs) from Kaito's ecosystem. Think of it like trading stocks, but instead of company shares, you're trading on how influential a KOL is based on their "mindshare score" - a metric that measures their social impact and engagement.
 
-## Overview
+## What is Mindshare Score?
 
-The protocol consists of four main components:
+A mindshare score is a numerical value that represents a KOL's influence and engagement level in the Crypto Twitter. This score is calculated based on various factors like:
 
-1. **YapOracle**: An on-chain oracle system that maintains and updates KOL mindshare scores with staleness checks.
-2. **YapOrderBook**: A hybrid trading infrastructure combining order book matching with liquidity pools.
-3. **YapOrderBookFactory**: A factory contract for deploying new KOL-specific trading markets.
-4. **YapEscrow**: An escrow contract that securely handles user funds and interacts with order books.
+- Social engagement
+- Content quality
+- Community interaction
+- Overall influence
 
-### Key Features
+The higher the score, the more influential the KOL is considered to be.
 
-- **Hybrid Liquidity Model**
+## How Does It Work?
 
-  - Primary order book matching for optimal price discovery.
-  - Supplementary liquidity pool for instant execution.
-  - 5% pool fee and 1% matching fee structure.
+1. **Trading Markets**: Each KOL has their own trading market that lasts for 3 days
+2. **Position Types**:
+   - Go LONG if you think their influence will increase
+   - Go SHORT if you think their influence will decrease
+3. **Trading**: Place orders through an order book system or use the liquidity pool for instant trades
+4. **Settlement**: After 3 days, positions are settled based on the final mindshare score
 
-- **Position Management**
+All trades use USDC as the settlement currency, making it easy to understand your profits and losses in dollar terms.
 
-  - Long/Short positions on KOL mindshare scores.
-  - Time-bound markets (3-day lifecycle).
-  - Automated PnL calculation and settlement.
-  - Real-time oracle price integration.
+## Core Components
 
-- **Role-Based Access Control**
+### 1. Oracle System (YapOracle)
 
-  - Secure oracle data updates.
-  - Protected market initialization.
-  - Controlled liquidity provision.
+- Provides real-time mindshare scores
+- Updates at least every hour
+- Ensures data reliability through staleness checks
 
-- **Secure Fund Management**
-  - Escrow-based fund handling ensures user balances are tracked and locked only when necessary.
-  - Funds are transferred from escrow to order books upon fulfillment or locking.
+### 2. Order Book (YapOrderBook)
 
-## Technical Architecture
+- Matches buy and sell orders
+- Provides transparent price discovery
+- Tracks all trading positions
+- Handles automatic settlement at market expiry
 
-### YapOracle
+### 3. Market Creation (YapOrderBookFactory)
 
-- Maintains KOL data (rank, mindshare score, timestamps).
-- Implements staleness checks (1-hour maximum delay).
-- Uses OpenZeppelin's AccessControl for secure updates.
-- Emits events for all data updates.
+- Creates new trading markets for KOLs
+- Enforces the 3-day trading period
+- Ensures proper market initialization
 
-### YapOrderBook
+### 4. Fund Security (YapEscrow)
 
-- FIFO order matching system.
-- Hybrid liquidity mechanism.
-- Position tracking with unique identifiers.
-- Automated PnL settlement.
-- USDC as the settlement currency.
+- Safely holds user funds
+- Only locks funds when needed for trades
+- Handles automatic profit/loss settlement
 
-### YapOrderBookFactory
+## Fees
 
-- Deploys new trading markets.
-- Enforces 3-day trading lifecycle.
-- Validates KOL IDs and oracle addresses.
-- Emits events for market creation.
+The protocol charges minimal fees to maintain sustainability:
 
-### YapEscrow
+- 0.3% trading fee on matched orders
+- All fees contribute to protocol maintenance and development
 
-- Handles user deposits and tracks balances.
-- Locks user funds for partially filled orders.
-- Transfers funds to order books upon fulfillment.
-- Ensures sufficient balances before fulfilling orders.
-- Tracks locked balances for each user per market.
+## For Developers
 
-## Smart Contract Interaction Flow
+### Requirements
 
-1. Admin initializes a new market through YapOrderBookFactory.
-2. Oracle updaters maintain current KOL data in YapOracle.
-3. Users deposit funds into YapEscrow.
-4. Traders can:
-   - Open long/short positions.
-   - Get matched through the order book.
-   - Access pool liquidity when needed.
-   - Close positions and settle PnL.
-5. YapEscrow securely manages fund transfers between users and order books.
+- Solidity ^0.8.17
+- Foundry for development and testing
+- OpenZeppelin contracts
 
-## Security Features
-
-- Role-based access control for critical functions.
-- Oracle staleness checks.
-- Non-zero value validations.
-- Safe math operations.
-- Protected liquidity pool operations.
-- Escrow-based fund management to prevent misuse of user funds.
-
-## Fee Structure
-
-- **Pool Fee**: 5% for liquidity pool usage.
-- **Matching Fee**: 1% for order book matches.
-- All fees contribute to the liquidity pool.
-
-## Requirements
-
-- Solidity ^0.8.24.
-- OpenZeppelin Contracts (AccessControl, SafeERC20).
-- USDC token for settlement.
-
-## Development and Testing
+### Quick Start
 
 ```bash
 # Install dependencies
@@ -112,11 +77,33 @@ forge test
 
 # Deploy contracts
 make deploy
-
-
 ```
+
+### Key Files
+
+- `src/YapOrderBook.sol`: Main trading logic
+- `src/YapEscrow.sol`: Fund management
+- `src/YapOracle.sol`: Mindshare data management
+- `src/YapOrderBookFactory.sol`: Market creation
+
+## Security Considerations
+
+The protocol implements several security measures:
+
+- Role-based access control for administrative functions
+- Hourly oracle updates with staleness checks
+- Secure fund management through escrow
+- Protected liquidity pool operations
+
+## Current Status
+
+This protocol is currently in development. While core functionality is implemented, we are actively:
+
+- Optimizing the order matching system
+- Enhancing liquidity mechanisms
+- Implementing additional security measures
+- Conducting thorough testing
 
 ## Disclaimer
 
-- This protocol is in development and should be used with caution. Smart contracts may contain bugs and can result in the loss of funds.
-- Ordebook is kinda retarted atm, need to find a better implementation.
+This protocol is in active development and should be used with caution. Smart contracts inherently carry risks and may contain bugs that could result in loss of funds. Always do your own research and understand the risks before participating.
