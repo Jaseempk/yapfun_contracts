@@ -1,6 +1,6 @@
 # YapFun Protocol
 
-YapFun is a decentralized trading platform that lets you trade on the social influence of Key Opinion Leaders (KOLs) from Kaito's ecosystem. Think of it like trading stocks, but instead of company shares, you're trading on how influential a KOL is based on their "mindshare score" - a metric that measures their social impact and engagement.
+YapFun is a decentralized marketplace that lets you trade on the social influence of KOLs from CT. Think of it like trading stocks, but instead of company shares, you're trading on how influential a KOL is based on their "mindshare score" - a metric that measures their social impact and engagement.
 
 ## What is Mindshare Score?
 
