@@ -22,6 +22,7 @@ contract YapOrderBook is AccessControl {
     error YOB__CantResetActiveMarket();
     error YOB__CantCloseBeforeExpiry();
     error YOB__Insufficient_Liquidity();
+    error YOB__WithdrawalAmountTooHigh();
 
     // Order status
     enum OrderStatus {
@@ -55,6 +56,8 @@ contract YapOrderBook is AccessControl {
 
     // Total trading volume
     uint256 public marketVolume;
+
+    uint256 public totalFeeCollected;
 
     // Order storage - orderId => Order
     mapping(uint256 => Order) public orders;
@@ -106,6 +109,8 @@ contract YapOrderBook is AccessControl {
     );
 
     event MarketReset(uint256 timestamp);
+
+    event FeeWithdrawalInitiated(address caller, uint256 amountWithdrawn);
 
     /**
      * @dev Constructor
@@ -240,6 +245,8 @@ contract YapOrderBook is AccessControl {
             int256 pnl = _calculatePnL(pos, currentPrice);
 
             uint256 feeAmount = (pos.filledQuantity * feePercentage) / 10000;
+
+            totalFeeCollected += feeAmount;
 
             emit PositionClosed(msg.sender, address(this), pnl, positionId);
 
@@ -454,6 +461,21 @@ contract YapOrderBook is AccessControl {
         }
     }
 
+    /// @notice Allows admin to withdraw collected trading fees
+    /// @param amountToWithdraw The amount of stablecoin fee to withdraw
+    /// @dev Only callable by admin role
+    function withdrawFee(
+        uint256 amountToWithdraw
+    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (amountToWithdraw > totalFeeCollected)
+            revert YOB__WithdrawalAmountTooHigh();
+        amountToWithdraw -= totalFeeCollected;
+
+        emit FeeWithdrawalInitiated(msg.sender, amountToWithdraw);
+
+        stablecoin.transferFrom(address(this), msg.sender, amountToWithdraw);
+    }
+
     /**
      * @dev Get order details
      * @param _orderId ID of the order to query
@@ -503,23 +525,10 @@ contract YapOrderBook is AccessControl {
         return (mindshareScore * 1e18); // Scale to 18 decimals
     }
 
-    /**
-     * @dev Update fee parameters (admin only function)
-     * @param _newFeePercentage New fee in basis points (e.g., 30 = 0.3%)
-     * @param _newFeeCollector New address to collect fees
-     */
-    function updateFeeParameters(
-        uint256 _newFeePercentage,
-        address _newFeeCollector
-    ) external {
-        // In production, add access control here
-        require(_newFeePercentage <= 100, "Fee too high"); // Max 1%
-        require(_newFeeCollector != address(0), "Invalid address");
-
-        feePercentage = _newFeePercentage;
-        feeCollector = _newFeeCollector;
-    }
-
+    /// @notice Get the number of orders for a specific mindshare position
+    /// @param isLong Boolean indicating if orders are for long (true) or short (false) positions
+    /// @param mindshare The mindshare ID to check orders for
+    /// @return uint256 Number of orders for the specified mindshare and direction
     function getOrderCountForMindshare(
         bool isLong,
         uint256 mindshare

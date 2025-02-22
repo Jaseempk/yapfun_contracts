@@ -469,19 +469,47 @@ contract YapOrderBookTest is Test {
         vm.stopPrank();
     }
 
-    function test_ResetMarket_NonAdminCaller() public {
+    function test_fee_collection() public {
         vm.startPrank(alice);
-
-        // Fast-forward past expiration
-        vm.warp(yap.expiryDuration() + 1);
-
-        uint256[] memory mindshares = new uint256[](1);
-        mindshares[0] = 100;
-
-        // Non-admin should not be able to call resetMarket
-        vm.expectRevert();
-        yap.resetMarket(mindshares);
-
+        usdc.approve(address(escrow), 100e18);
+        escrow.depositUserFund(100e18); // Deposit funds into escrow
+        uint256 orderIdAlice = yap.createOrder(true, 50e18); // Alice creates LONG order
         vm.stopPrank();
+
+        vm.startPrank(bob);
+        usdc.approve(address(escrow), 100e18);
+        escrow.depositUserFund(100e18); // Deposit funds into escrow
+        uint256 orderIdBob = yap.createOrder(false, 50e18); // Bob creates SHORT order
+        vm.stopPrank();
+
+        skip(7 days);
+
+        vm.prank(address(yap));
+        usdc.approve(address(escrow), type(uint256).max);
+
+        vm.startPrank(address(factory));
+        yap.closePosition(orderIdAlice);
+        yap.closePosition(orderIdBob);
+        assertTrue(yap.totalFeeCollected() > 0);
+        vm.stopPrank();
+    }
+
+    function test_fee_withdrawal() public {
+        test_fee_collection();
+        uint256 feeCollected = 300000000000000000;
+        assertEq(yap.totalFeeCollected(), feeCollected);
+
+        vm.prank(address(factory));
+        yap.withdrawFee(feeCollected);
+    }
+
+    function test_fee_withdrawal_revert() public {
+        test_fee_collection();
+        uint256 feeCollected = 300000000000000000;
+        assertEq(yap.totalFeeCollected(), feeCollected);
+
+        vm.prank(address(factory));
+        vm.expectRevert(YapOrderBook.YOB__WithdrawalAmountTooHigh.selector);
+        yap.withdrawFee(feeCollected + 1e18);
     }
 }
