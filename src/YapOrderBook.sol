@@ -275,6 +275,7 @@ contract YapOrderBook is AccessControl {
             delete orderIndex[true][mindshares[i]];
             delete orderIndex[false][mindshares[i]];
         }
+        totalFeeCollected = 1;
         marketVolume = 1;
         expiryDuration = block.timestamp + MARKET_DURATION;
     }
@@ -467,13 +468,13 @@ contract YapOrderBook is AccessControl {
     function withdrawFee(
         uint256 amountToWithdraw
     ) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (amountToWithdraw > totalFeeCollected)
+        if (amountToWithdraw > (totalFeeCollected - 1))
             revert YOB__WithdrawalAmountTooHigh();
         amountToWithdraw -= totalFeeCollected;
 
         emit FeeWithdrawalInitiated(msg.sender, amountToWithdraw);
 
-        stablecoin.transferFrom(address(this), msg.sender, amountToWithdraw);
+        stablecoin.transferFrom(address(this), feeCollector, amountToWithdraw);
     }
 
     /**

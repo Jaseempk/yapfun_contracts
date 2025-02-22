@@ -16,6 +16,8 @@ contract YapOrderBookFactory is AccessControl {
         0x081827b8C3Aa05287b5aA2bC3051fbE638F33152;
     YapOrderBook newMarket;
 
+    mapping(uint256 kolId => address market) public kolIdToMarket;
+
     event NewMarketInitialisedAndWhitelisted(
         uint256 kolId,
         address maker,
@@ -40,6 +42,9 @@ contract YapOrderBookFactory is AccessControl {
             _oracle,
             kolId
         );
+
+        kolIdToMarket[kolId] = address(newMarket);
+
         emit NewMarketInitialisedAndWhitelisted(
             kolId,
             msg.sender,
