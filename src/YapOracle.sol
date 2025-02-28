@@ -36,6 +36,13 @@ contract YapOracle is AccessControl {
         uint256 timestamp
     );
 
+    event CrashedOutKolDataUpdated(
+        uint256 indexed kolId,
+        uint256 rank,
+        uint256 mindshareScore,
+        uint256 timestamp
+    );
+
     /**
      * @dev Constructor that sets the initial roles and grants the updater role to the specified address.
      * @param updater The address to which the updater role will be granted.
@@ -69,6 +76,13 @@ contract YapOracle is AccessControl {
             if (newRank == 0 || mindshareScores[i] == 0 || kolId == 0)
                 revert YO__InvalidParams();
 
+            emit KOLDataUpdated(
+                kolId,
+                newRank,
+                mindshareScores[i],
+                block.timestamp
+            );
+
             kolData[kolId] = KOLData({
                 rank: newRank,
                 mindshareScore: mindshareScores[i],
@@ -77,14 +91,33 @@ contract YapOracle is AccessControl {
             });
 
             lastUpdateTime[kolId] = block.timestamp;
-
-            emit KOLDataUpdated(
-                kolId,
-                newRank,
-                mindshareScores[i],
-                block.timestamp
-            );
         }
+    }
+
+    /// @notice Updates data for a KOL (Key Opinion Leader) that has crashed out of top100
+    /// @dev Only callable by accounts with UPDATER_ROLE
+    /// @param kolId The unique identifier of the KOL
+    /// @param rank The new rank value for the KOL (must be > 0)
+    /// @param mindshare The new mindshare value for the KOL (must be > 0)
+    function updateCrashedOutKolData(
+        uint256 kolId,
+        uint256 rank,
+        uint256 mindshare
+    ) public onlyRole(UPDATER_ROLE) {
+        // Validate data
+        if (rank == 0 || mindshare == 0 || kolId == 0)
+            revert YO__InvalidParams();
+
+        emit CrashedOutKolDataUpdated(kolId, rank, mindshare, block.timestamp);
+
+        kolData[kolId] = KOLData(
+            rank,
+            mindshare,
+            block.timestamp,
+            block.number
+        );
+
+        lastUpdateTime[kolId] = block.timestamp;
     }
 
     /**

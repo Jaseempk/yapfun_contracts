@@ -67,7 +67,7 @@ contract YapOrderBook is AccessControl {
     mapping(bool => mapping(uint256 => uint256[])) private orderIndex;
 
     // Track active orders count by KOL
-    mapping(uint256 => uint256) public activeOrderCount;
+    uint256 public activeOrderCount;
 
     // USDC/USDT interface
     IERC20 public stablecoin;
@@ -92,14 +92,20 @@ contract YapOrderBook is AccessControl {
         uint256 indexed kolId,
         bool isLong,
         uint256 mindshareValue,
-        uint256 quantity
+        uint256 quantity,
+        uint256 _totalVolume,
+        uint256 activeOrderCount
     );
     event OrderFilled(
         uint256 indexed orderId,
         uint256 filledQuantity,
         address counterpartyTrader
     );
-    event OrderCanceled(uint256 indexed orderId, Order order);
+    event OrderCanceled(
+        uint256 indexed orderId,
+        Order order,
+        uint256 cancelAmount
+    );
 
     event PositionClosed(
         address user,
@@ -160,7 +166,7 @@ contract YapOrderBook is AccessControl {
 
         // Index the order
         orderIndex[_isLong][_mindshareValue].push(orderId);
-        activeOrderCount[kolId]++;
+        activeOrderCount++;
 
         marketVolume += _quantity;
 
@@ -170,7 +176,9 @@ contract YapOrderBook is AccessControl {
             kolId,
             _isLong,
             _mindshareValue,
-            _quantity
+            _quantity,
+            marketVolume,
+            activeOrderCount
         );
 
         // Try to match the order immediately
@@ -196,9 +204,9 @@ contract YapOrderBook is AccessControl {
 
         // Update order status
         order.status = OrderStatus.CANCELED;
-        activeOrderCount[order.kolId]--;
+        activeOrderCount--;
 
-        emit OrderCanceled(_orderId, order);
+        emit OrderCanceled(_orderId, order, refundAmount);
 
         // Refund remaining stablecoin
         if (refundAmount > 0) {
@@ -391,7 +399,7 @@ contract YapOrderBook is AccessControl {
                 // Update order statuses
                 if (matchOrder.filledQuantity == matchOrder.quantity) {
                     matchOrder.status = OrderStatus.FILLED;
-                    activeOrderCount[matchOrder.kolId]--;
+                    activeOrderCount--;
                 } else {
                     matchOrder.status = OrderStatus.PARTIAL_FILLED;
                 }
@@ -403,7 +411,7 @@ contract YapOrderBook is AccessControl {
         // Update final status of the order
         if (order.filledQuantity == order.quantity) {
             order.status = OrderStatus.FILLED;
-            activeOrderCount[order.kolId]--;
+            activeOrderCount--;
 
             emit OrderFilled(_orderId, order.filledQuantity, address(0));
 
@@ -454,7 +462,7 @@ contract YapOrderBook is AccessControl {
                     orders[orderId].status == OrderStatus.ACTIVE ||
                     orders[orderId].status == OrderStatus.PARTIAL_FILLED
                 ) {
-                    activeOrderCount[kolId]--;
+                    activeOrderCount--;
                 }
 
                 break;
@@ -509,13 +517,6 @@ contract YapOrderBook is AccessControl {
     }
 
     /**
-     * @dev Get count of active orders for a KOL
-     */
-    function getActiveOrderCount() external view returns (uint256) {
-        return activeOrderCount[kolId];
-    }
-
-    /**
      * @dev Gets the current price from the oracle.
      * @return The current price.
      */
@@ -523,7 +524,7 @@ contract YapOrderBook is AccessControl {
         (, uint256 mindshareScore, , bool isStale) = oracle.getKOLData(kolId);
         if (isStale) revert YOB__DATA_EXPIRED();
 
-        return (mindshareScore * 1e18); // Scale to 18 decimals
+        return (mindshareScore);
     }
 
     /// @notice Get the number of orders for a specific mindshare position

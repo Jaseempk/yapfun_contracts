@@ -38,7 +38,7 @@ fetch(url, options)
         const latency = (endTime - startTime) / 1000; // Convert ms to seconds
 
         console.log(`API Response Latency: ${latency.toFixed(3)} seconds`);
-        // console.log("API Response:", data);
+        console.log("API Response:", data);
 
         // Save the response to a JSON file
         const filePath = "api_response.json"; // File path to save the response

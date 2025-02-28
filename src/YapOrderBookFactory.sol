@@ -9,6 +9,7 @@ contract YapOrderBookFactory is AccessControl {
     //error
     error YOBF__InvalidKolId();
     error YOBF__InvalidOracle();
+    error YOBF__KOLOrderBookAlreadyExist();
 
     IYapEscrow yapEscrow;
 
@@ -35,6 +36,8 @@ contract YapOrderBookFactory is AccessControl {
     ) public onlyRole(DEFAULT_ADMIN_ROLE) returns (address) {
         if (_oracle == address(0)) revert YOBF__InvalidOracle();
         if (kolId <= 0) revert YOBF__InvalidKolId();
+        if (kolIdToMarket[kolId] != address(0))
+            revert YOBF__KOLOrderBookAlreadyExist();
         newMarket = new YapOrderBook(
             USDC_ADDRESS,
             address(this),
