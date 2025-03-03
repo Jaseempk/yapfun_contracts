@@ -103,7 +103,7 @@ contract YapOracle is AccessControl {
         uint256 kolId,
         uint256 rank,
         uint256 mindshare
-    ) public onlyRole(UPDATER_ROLE) {
+    ) public onlyRole(DEFAULT_ADMIN_ROLE) {
         // Validate data
         if (rank == 0 || mindshare == 0 || kolId == 0)
             revert YO__InvalidParams();

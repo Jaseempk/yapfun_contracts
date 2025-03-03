@@ -19,6 +19,7 @@ contract YapOrderBook is AccessControl {
     error YOB__CallerIsNotTrader();
     error YOB__OrderYetToBeFilled();
     error YOB__MindshareArrayEmpty();
+    error YOB__MarketAlreadyExpired();
     error YOB__CantResetActiveMarket();
     error YOB__CantCloseBeforeExpiry();
     error YOB__Insufficient_Liquidity();
@@ -57,7 +58,11 @@ contract YapOrderBook is AccessControl {
     // Total trading volume
     uint256 public marketVolume;
 
+    // Total fee collected
     uint256 public totalFeeCollected;
+
+    //market status
+    bool public isMarketActive;
 
     // Order storage - orderId => Order
     mapping(uint256 => Order) public orders;
@@ -149,6 +154,8 @@ contract YapOrderBook is AccessControl {
         uint256 _quantity
     ) external returns (uint256) {
         if (_quantity <= 0) revert YOB__INVALIDSIZE();
+        if (block.timestamp > expiryDuration)
+            revert YOB__MarketAlreadyExpired();
 
         // Create the order
         uint256 orderId = nextOrderId++;
@@ -229,7 +236,11 @@ contract YapOrderBook is AccessControl {
         // if (msg.sender != pos.trader) revert YOB__INVALID_TRADER();
         if (block.timestamp < expiryDuration)
             revert YOB__CantCloseBeforeExpiry();
+
         if (pos.trader == address(0)) revert YOB__InvalidPosition();
+        if (isMarketActive) {
+            isMarketActive = false;
+        }
         if (pos.filledQuantity == 0) {
             emit PositionClosed(msg.sender, address(this), 0, positionId);
             _removeFromOrderIndex(positionId, pos.isLong, pos.mindshareValue);
@@ -277,6 +288,8 @@ contract YapOrderBook is AccessControl {
         if (mindshares.length == 0) revert YOB__MindshareArrayEmpty();
         if (block.timestamp < expiryDuration)
             revert YOB__CantResetActiveMarket();
+
+        if (isMarketActive) revert YOB__CantResetActiveMarket();
 
         emit MarketReset(block.timestamp);
         for (uint i = 0; i < mindshares.length; i++) {
