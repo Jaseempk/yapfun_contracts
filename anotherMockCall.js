@@ -7,11 +7,11 @@ async function makeApiCall() {
         const headers = {
             'accept': 'application/json, text/plain, */*',
             'accept-language': 'en-US,en;q=0.9',
-            'authorization': 'Bearer', // Replace with your actual Bearer token if needed
+            'authorization': 'Bearer',
             'content-type': 'application/json',
             'origin': 'https://yaps.kaito.ai',
             'priority': 'u=1, i',
-            'privy-id-token': '', // Add your actual token here if required
+            'privy-id-token': '',
             'referer': 'https://yaps.kaito.ai/',
             'sec-ch-ua': '"Not(A:Brand";v="99", "Google Chrome";v="133", "Chromium";v="133"',
             'sec-ch-ua-mobile': '?1',

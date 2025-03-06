@@ -20,6 +20,7 @@ contract YapOrderBook is AccessControl {
     error YOB__OrderYetToBeFilled();
     error YOB__MindshareArrayEmpty();
     error YOB__MarketAlreadyExpired();
+    error YOB_InvalidMarketDuration();
     error YOB__CantResetActiveMarket();
     error YOB__CantCloseBeforeExpiry();
     error YOB__Insufficient_Liquidity();
@@ -50,7 +51,7 @@ contract YapOrderBook is AccessControl {
     uint256 private nextOrderId = 1;
 
     // KOL identifier
-    uint256 private immutable kolId;
+    uint256 public immutable kolId;
 
     // Market expiry timestamp
     uint256 public expiryDuration;
@@ -95,6 +96,7 @@ contract YapOrderBook is AccessControl {
         uint256 indexed orderId,
         address indexed trader,
         uint256 indexed kolId,
+        address market,
         bool isLong,
         uint256 mindshareValue,
         uint256 quantity,
@@ -127,21 +129,28 @@ contract YapOrderBook is AccessControl {
      * @dev Constructor
      * @param _stablecoin Address of the USDC/USDT contract
      * @param _feeCollector Address that collects trading fees
+     * @param _escrow Address of the escrow contract that manages funds
+     * @param yapOracle Address of the oracle contract that provides KOL data
+     * @param _kolId ID of the Key Opinion Leader (KOL) for this orderbook
+     * @param expirersAt Duration in seconds until market expiry (must be <= MARKET_DURATION)
      */
     constructor(
         address _stablecoin,
         address _feeCollector,
         address _escrow,
         address yapOracle,
-        uint256 _kolId
+        uint256 _kolId,
+        uint256 expirersAt
     ) {
+        if (expirersAt > MARKET_DURATION) revert YOB_InvalidMarketDuration();
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         stablecoin = IERC20(_stablecoin);
         escrow = IYapEscrow(_escrow);
         oracle = IYapOracle(yapOracle);
         feeCollector = _feeCollector;
         kolId = _kolId;
-        expiryDuration = block.timestamp + MARKET_DURATION;
+        expiryDuration = block.timestamp + expirersAt;
+        isMarketActive = true;
     }
 
     /**
@@ -154,7 +163,7 @@ contract YapOrderBook is AccessControl {
         uint256 _quantity
     ) external returns (uint256) {
         if (_quantity <= 0) revert YOB__INVALIDSIZE();
-        if (block.timestamp > expiryDuration)
+        if (block.timestamp > expiryDuration || isMarketActive == false)
             revert YOB__MarketAlreadyExpired();
 
         // Create the order
@@ -173,7 +182,7 @@ contract YapOrderBook is AccessControl {
 
         // Index the order
         orderIndex[_isLong][_mindshareValue].push(orderId);
-        activeOrderCount++;
+        activeOrderCount += 1;
 
         marketVolume += _quantity;
 
@@ -181,6 +190,7 @@ contract YapOrderBook is AccessControl {
             orderId,
             msg.sender,
             kolId,
+            address(this),
             _isLong,
             _mindshareValue,
             _quantity,
@@ -238,9 +248,11 @@ contract YapOrderBook is AccessControl {
             revert YOB__CantCloseBeforeExpiry();
 
         if (pos.trader == address(0)) revert YOB__InvalidPosition();
-        if (isMarketActive) {
-            isMarketActive = false;
-        }
+
+        isMarketActive = isMarketActive == true
+            ? isMarketActive
+            : !isMarketActive;
+
         if (pos.filledQuantity == 0) {
             emit PositionClosed(msg.sender, address(this), 0, positionId);
             _removeFromOrderIndex(positionId, pos.isLong, pos.mindshareValue);
@@ -283,11 +295,13 @@ contract YapOrderBook is AccessControl {
     /// @param mindshares Array of mindshare IDs to reset orders for
     /// @custom:throws YOB__CantResetActiveMarket if market has not expired yet
     function resetMarket(
-        uint256[] calldata mindshares
+        uint256[] calldata mindshares,
+        uint256 expiresAt
     ) public onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (mindshares.length == 0) revert YOB__MindshareArrayEmpty();
         if (block.timestamp < expiryDuration)
             revert YOB__CantResetActiveMarket();
+        if (mindshares.length == 0) revert YOB__MindshareArrayEmpty();
+        if (expiresAt > MARKET_DURATION) revert YOB_InvalidMarketDuration();
 
         if (isMarketActive) revert YOB__CantResetActiveMarket();
 
@@ -298,7 +312,8 @@ contract YapOrderBook is AccessControl {
         }
         totalFeeCollected = 1;
         marketVolume = 1;
-        expiryDuration = block.timestamp + MARKET_DURATION;
+        isMarketActive = true;
+        expiryDuration = block.timestamp + expiresAt;
     }
 
     /**
@@ -340,7 +355,7 @@ contract YapOrderBook is AccessControl {
     function _calculatePnL(
         Order memory pos,
         uint256 currentPrice
-    ) internal pure returns (int256) {
+    ) public pure returns (int256) {
         if (pos.isLong) {
             return
                 int256(
@@ -465,9 +480,10 @@ contract YapOrderBook is AccessControl {
         // Find the index of the order ID in the array
         for (uint256 i = 0; i < orderList.length; i++) {
             if (orderList[i] == orderId) {
-                // Replace with the last element and pop (gas efficient way to remove from array)
+                // Replace with the last element and pop
                 if (i != orderList.length - 1) {
                     orderList[i] = orderList[orderList.length - 1];
+                    orderList.pop();
                 }
 
                 // Update active order count if needed
@@ -491,7 +507,7 @@ contract YapOrderBook is AccessControl {
     ) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (amountToWithdraw > (totalFeeCollected - 1))
             revert YOB__WithdrawalAmountTooHigh();
-        amountToWithdraw -= totalFeeCollected;
+        totalFeeCollected -= amountToWithdraw;
 
         emit FeeWithdrawalInitiated(msg.sender, amountToWithdraw);
 

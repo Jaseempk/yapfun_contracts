@@ -20,6 +20,7 @@ contract YapOrderBookTest is Test {
     IERC20 usdc;
     address constant FEED = address(0xdead);
     address constant INSURANCE = address(0xbeef);
+    uint32 public constant MARKET_DURATION = 3 days;
 
     address alice = address(0x1);
     address bob = address(0x2);
@@ -28,7 +29,7 @@ contract YapOrderBookTest is Test {
     address _escrow = makeAddr("factory");
 
     function setUp() public {
-        usdc = IERC20(0x081827b8C3Aa05287b5aA2bC3051fbE638F33152);
+        usdc = IERC20(0xC129124eA2Fd4D63C1Fc64059456D8f231eBbed1);
         deal(address(usdc), alice, 1000e18);
         deal(address(usdc), bob, 1000e18);
         deal(address(usdc), charlie, 1000e18);
@@ -42,7 +43,8 @@ contract YapOrderBookTest is Test {
         assertEq(address(yapEscrowComputed), address(escrow));
         address _yap = factory.initialiseMarket(
             1, // influencerId
-            FEED
+            FEED,
+            MARKET_DURATION
         );
 
         yap = YapOrderBook(_yap);
@@ -365,14 +367,15 @@ contract YapOrderBookTest is Test {
             address trader = address(uint160(i + 1));
             vm.startPrank(trader);
             deal(address(usdc), trader, 100e18); // Fund each trader
-            usdc.approve(address(escrow), 100); // Approve escrow
+            usdc.approve(address(escrow), 100e18); // Approve escrow
             escrow.depositUserFund(100e18); // Deposit funds into escrow
             yap.createOrder(i % 2 == 0, 50e18); // Alternate between LONG and SHORT
+
             vm.stopPrank();
         }
 
         // Validate active order count
-        assertEq(yap.getActiveOrderCount(), numOrders);
+        assertEq(yap.activeOrderCount(), numOrders);
     }
 
     function testFuzz_CreateOrder_ValidSize(uint256 size) public {
@@ -412,7 +415,7 @@ contract YapOrderBookTest is Test {
         yap.closePosition(alicePosId2);
 
         // Reset the market
-        yap.resetMarket(mindshares);
+        yap.resetMarket(mindshares, 3 days);
 
         // Validate that orderIndex is cleared
         assertTrue(yap.getOrderCountForMindshare(true, 100) == 0);
@@ -434,20 +437,18 @@ contract YapOrderBookTest is Test {
         // Attempt to reset with an empty array
         uint256[] memory mindshares = new uint256[](0);
         vm.expectRevert(YapOrderBook.YOB__MindshareArrayEmpty.selector);
-        yap.resetMarket(mindshares);
+        yap.resetMarket(mindshares, MARKET_DURATION);
 
         vm.stopPrank();
     }
 
     function test_ResetMarket_BeforeExpiration() public {
-        vm.startPrank(admin);
-
         // Attempt to reset before expiration
         uint256[] memory mindshares = new uint256[](1);
         mindshares[0] = 100;
 
         vm.expectRevert(YapOrderBook.YOB__CantResetActiveMarket.selector);
-        yap.resetMarket(mindshares);
+        yap.resetMarket(mindshares, MARKET_DURATION);
 
         vm.stopPrank();
     }
@@ -464,22 +465,22 @@ contract YapOrderBookTest is Test {
         mindshares[1] = 888; // Non-existent mindshare
 
         // This should not revert but will have no effect
-        yap.resetMarket(mindshares);
+        yap.resetMarket(mindshares, MARKET_DURATION);
 
         vm.stopPrank();
     }
 
     function test_fee_collection() public {
         vm.startPrank(alice);
-        usdc.approve(address(escrow), 100e18);
+        usdc.approve(address(escrow), 100e6);
         escrow.depositUserFund(100e18); // Deposit funds into escrow
-        uint256 orderIdAlice = yap.createOrder(true, 50e18); // Alice creates LONG order
+        uint256 orderIdAlice = yap.createOrder(true, 50e6); // Alice creates LONG order
         vm.stopPrank();
 
         vm.startPrank(bob);
-        usdc.approve(address(escrow), 100e18);
-        escrow.depositUserFund(100e18); // Deposit funds into escrow
-        uint256 orderIdBob = yap.createOrder(false, 50e18); // Bob creates SHORT order
+        usdc.approve(address(escrow), 100e6);
+        escrow.depositUserFund(100e6); // Deposit funds into escrow
+        uint256 orderIdBob = yap.createOrder(false, 50e6); // Bob creates SHORT order
         vm.stopPrank();
 
         skip(7 days);
@@ -496,11 +497,17 @@ contract YapOrderBookTest is Test {
 
     function test_fee_withdrawal() public {
         test_fee_collection();
-        uint256 feeCollected = 300000000000000000;
-        assertEq(yap.totalFeeCollected(), feeCollected);
+        uint256 feeCollected = 300000000000000000 - 1;
+        assertEq(yap.totalFeeCollected(), feeCollected + 1);
+        console.log("fee collected: ", yap.totalFeeCollected());
 
-        vm.prank(address(factory));
+        vm.startPrank(address(yap));
+        usdc.approve(address(factory), type(uint256).max);
+        vm.stopPrank();
+
+        vm.startPrank(address(factory));
         yap.withdrawFee(feeCollected);
+        vm.stopPrank();
     }
 
     function test_fee_withdrawal_revert() public {

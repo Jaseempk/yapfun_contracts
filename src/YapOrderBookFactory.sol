@@ -9,12 +9,13 @@ contract YapOrderBookFactory is AccessControl {
     //error
     error YOBF__InvalidKolId();
     error YOBF__InvalidOracle();
+    error YOBF__InvalidExpiryTime();
     error YOBF__KOLOrderBookAlreadyExist();
 
     IYapEscrow yapEscrow;
 
     address public constant USDC_ADDRESS =
-        0x081827b8C3Aa05287b5aA2bC3051fbE638F33152;
+        0xC129124eA2Fd4D63C1Fc64059456D8f231eBbed1;
     YapOrderBook newMarket;
 
     mapping(uint256 kolId => address market) public kolIdToMarket;
@@ -32,9 +33,11 @@ contract YapOrderBookFactory is AccessControl {
 
     function initialiseMarket(
         uint256 kolId,
-        address _oracle
+        address _oracle,
+        uint256 expiresAt
     ) public onlyRole(DEFAULT_ADMIN_ROLE) returns (address) {
         if (_oracle == address(0)) revert YOBF__InvalidOracle();
+        if (expiresAt <= block.timestamp) revert YOBF__InvalidExpiryTime();
         if (kolId <= 0) revert YOBF__InvalidKolId();
         if (kolIdToMarket[kolId] != address(0))
             revert YOBF__KOLOrderBookAlreadyExist();
@@ -43,7 +46,8 @@ contract YapOrderBookFactory is AccessControl {
             address(this),
             address(yapEscrow),
             _oracle,
-            kolId
+            kolId,
+            expiresAt
         );
 
         kolIdToMarket[kolId] = address(newMarket);
